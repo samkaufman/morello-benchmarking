@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-# declare -a matmul_sizes=("64" "128" "256")
-declare -a matmul_sizes=("1")
+declare -a matmul_sizes=("64")
 
 # Get the latest commit hash of the main branch
 declare -r MORELLO_HASH=$(
