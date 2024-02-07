@@ -1,0 +1,4 @@
+[submodule "cherrybench"]
+	path = cherrybench
+	url = https://github.com/samkaufman/cherrybench.git
+	branch = main
