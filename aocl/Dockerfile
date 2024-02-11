@@ -31,5 +31,5 @@ COPY --from=build-aocl /opt/aocl /opt/aocl
 WORKDIR /app
 COPY aocl_bench.cpp build_and_run.sh ./
 RUN chmod u=rx,g=,o= build_and_run.sh
-ENV BLIS_ARCH_DEBUG=1 LD_LIBRARY_PATH=/opt/aocl/lib
+ENV BLIS_ARCH_DEBUG=1 BLIS_NUM_THREADS=1 LD_LIBRARY_PATH=/opt/aocl/lib
 ENTRYPOINT ["./build_and_run.sh"]
