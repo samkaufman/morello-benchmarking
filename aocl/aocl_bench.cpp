@@ -23,8 +23,8 @@ constexpr dim_t lda = k;
 constexpr dim_t ldb = n;
 constexpr dim_t ldc = n;
 
-void kernel(int8_t *a, int8_t *b, int8_t *c) {
-    aocl_gemm_s8s8s16os8(
+void kernel(int8_t *a, int8_t *b, int16_t *c) {
+    aocl_gemm_s8s8s16os16(
         storage, transa, transb,
         m, n, k,
         alpha,
@@ -49,7 +49,7 @@ int main() {
     std::uniform_int_distribution<int8_t> distribution_b(-128, 127);
     int8_t *a;
     int8_t *b;
-    int8_t *c;
+    int16_t *c;
     if (posix_memalign((void **)&a, 128, sizeof(int8_t) * m * k) != 0) {
         std::cerr << "posix_memalign failed" << std::endl;
         exit(1);
@@ -58,7 +58,7 @@ int main() {
         std::cerr << "posix_memalign failed" << std::endl;
         exit(1);
     }
-    if (posix_memalign((void **)&c, 128, sizeof(int8_t) * m * n) != 0) {
+    if (posix_memalign((void **)&c, 128, sizeof(int16_t) * m * n) != 0) {
         std::cerr << "posix_memalign failed" << std::endl;
         exit(1);
     }

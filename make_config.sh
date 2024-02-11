@@ -20,7 +20,7 @@ echo "command = [ \"matmul\", \"$i\" ]"
 echo ""
  
 echo '[[jobs]]'
-echo 'name = "matmul-s8s8s16os8"'
+echo 'name = "matmul-s8s8s16os16"'
 echo "size = $i"
 echo 'batch_size = 1'
 echo 'backend_name = "test-aocl"'
