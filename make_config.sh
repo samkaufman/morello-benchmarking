@@ -19,6 +19,15 @@ echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
 echo "command = [ \"matmul\", \"$i\" ]"
 echo ""
  
+echo '[[jobs]]'
+echo 'name = "matmul-s8s8s16os8"'
+echo "size = $i"
+echo 'batch_size = 1'
+echo 'backend_name = "test-aocl"'
+echo 'docker_path = "./aocl"'
+echo "command = [ \"$i\" ]"
+echo ""
+
 for b in "tvm" "eigen"; do
     echo '[[jobs]]'
     echo 'name = "matmul"'
