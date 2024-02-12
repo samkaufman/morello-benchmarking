@@ -23,8 +23,8 @@ constexpr dim_t lda = k;
 constexpr dim_t ldb = n;
 constexpr dim_t ldc = n;
 
-void kernel(int8_t *a, int8_t *b, int16_t *c) {
-    aocl_gemm_s8s8s16os16(
+void kernel(uint8_t *a, int8_t *b, int16_t *c) {
+    aocl_gemm_u8s8s16os16(
         storage, transa, transb,
         m, n, k,
         alpha,
@@ -45,12 +45,12 @@ int main() {
 
     std::random_device rd;
     std::mt19937 generator(rd());
-    std::uniform_int_distribution<int8_t> distribution_a(-128, 127);
+    std::uniform_int_distribution<uint8_t> distribution_a(0, 256);
     std::uniform_int_distribution<int8_t> distribution_b(-128, 127);
-    int8_t *a;
+    uint8_t *a;
     int8_t *b;
     int16_t *c;
-    if (posix_memalign((void **)&a, 128, sizeof(int8_t) * m * k) != 0) {
+    if (posix_memalign((void **)&a, 128, sizeof(uint8_t) * m * k) != 0) {
         std::cerr << "posix_memalign failed" << std::endl;
         exit(1);
     }
