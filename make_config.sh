@@ -9,6 +9,15 @@ declare -r MORELLO_HASH=$(
     curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
     jq -r '.commit.sha')
 
+echo '[[jobs]]'
+echo 'name = "matmul-u8s8s16s16"'
+echo "size = 64"
+echo 'batch_size = 1'
+echo "backend_name = \"morello-oneoff\""
+echo "docker_path = \"./morello-oneoff-matmul-u8s8s16\""
+echo "command = []"
+echo ""
+
 for i in "${morello_matmul_sizes[@]}"; do
 echo '[[jobs]]'
 echo 'name = "matmul"'
@@ -23,7 +32,7 @@ done
 
 for i in "${matmul_sizes[@]}"; do
 echo '[[jobs]]'
-echo 'name = "matmul-u8s8s16os16"'
+echo 'name = "matmul-u8s8s16s16"'
 echo "size = $i"
 echo 'batch_size = 1'
 echo 'backend_name = "aocl"'
