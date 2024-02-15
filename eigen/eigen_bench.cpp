@@ -5,6 +5,7 @@
 
 typedef Eigen::Matrix<unsigned int, Eigen::Dynamic, Eigen::Dynamic> MatrixU32;
 
+__attribute__((noinline))
 void kernel(MatrixU32 &m, MatrixU32 &n, MatrixU32 &r)
 {
     r.noalias() = m * n;

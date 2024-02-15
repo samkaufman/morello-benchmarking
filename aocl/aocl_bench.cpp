@@ -23,6 +23,7 @@ constexpr dim_t lda = k;
 constexpr dim_t ldb = n;
 constexpr dim_t ldc = n;
 
+__attribute__((noinline))
 void kernel(uint8_t *a, int8_t *b, int16_t *c) {
     aocl_gemm_u8s8s16os16(
         storage, transa, transb,
