@@ -2,6 +2,7 @@
 set -e
 
 declare -a morello_matmul_sizes=("8")
+declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_sizes=("8" "64" "128" "256" "512" "1024" "2048")
 
 # Get the latest commit hash of the main branch
@@ -9,14 +10,16 @@ declare -r MORELLO_HASH=$(
     curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
     jq -r '.commit.sha')
 
+for i in "${matmul_oneoff_sizes[@]}"; do
 echo '[[jobs]]'
-echo 'name = "matmul-u8s8s16s16"'
-echo "size = 64"
+echo 'name = "matmul-u8s8s16"'
+echo "size = $i"
 echo 'batch_size = 1'
 echo "backend_name = \"morello-oneoff\""
-echo "docker_path = \"./morello-oneoff-matmul-u8s8s16\""
+echo "docker_path = \"./morello-oneoff-matmul-u8s8s16/$i\""
 echo "command = []"
 echo ""
+done
 
 for i in "${morello_matmul_sizes[@]}"; do
 echo '[[jobs]]'
@@ -32,7 +35,7 @@ done
 
 for i in "${matmul_sizes[@]}"; do
 echo '[[jobs]]'
-echo 'name = "matmul-u8s8s16s16"'
+echo 'name = "matmul-u8s8s16"'
 echo "size = $i"
 echo 'batch_size = 1'
 echo 'backend_name = "aocl"'

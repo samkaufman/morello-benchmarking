@@ -398,7 +398,7 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Environment variable CHERRYBENCH_LOOP_STEPS is not set.\n");
     exit(1);
   }
-  const int inner_steps = atoi(inner_steps_env);
+  const int bench_samples = atoi(inner_steps_env);
 
   uint8_t *restrict ag;
   posix_memalign((void **)&ag, 128, 4096*sizeof(uint8_t));
@@ -412,19 +412,28 @@ int main(int argc, char *argv[]) {
   posix_memalign((void **)&ai, 128, 4096*sizeof(int16_t));
   memset(ai, rand(), 4096*sizeof(int16_t));
 
-  kernel(&ag[(0)], &ah[(0)], &ai[(0)]);
-  for (unsigned int i = 0; i < 10; i++)
-  {
+  if (argc != 1) {
+    fprintf(stderr, "Unexpected number of arguments.\n");
+    return 1;
+  }
+
+  for (int i = 0; i < 10; ++i) {
+    kernel(&ag[(0)], &ah[(0)], &ai[(0)]);
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    for (unsigned int j = 0; j < inner_steps; j++)
+  #pragma clang loop unroll(disable)
+    for (long long bench_itr = 0; bench_itr < bench_samples; ++bench_itr) {
       kernel(&ag[(0)], &ah[(0)], &ai[(0)]);
+    }
     clock_gettime(CLOCK_MONOTONIC, &end);
     struct timespec delta = ts_diff(start, end);
-
-    long elapsed_ns = delta.tv_sec * 1000000000L + delta.tv_nsec;
-    printf("%ldns\n", elapsed_ns);
+    long long elapsed_ns = delta.tv_sec * 1000000000L + delta.tv_nsec;
+    printf("%lldns\n", elapsed_ns);
   }
+
+  free(ai);
+  free(ah);
+  free(ag);
 
   return 0;
 }
