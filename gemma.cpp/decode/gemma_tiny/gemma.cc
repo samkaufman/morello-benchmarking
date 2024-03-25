@@ -382,6 +382,35 @@ void RandomizeActivations(Activations<TConfig, kBatchSize>* acts) {
   for (auto& x : acts->ffw_out) x = dis_real32(gen);
 }
 
+
+template <size_t kCapacity>
+void RandomizeCompressedArrayBF16(CompressedArray<hwy::bfloat16_t, kCapacity> *arr) {
+  std::default_random_engine gen;
+  std::uniform_int_distribution<int16_t> dis_int16(0, 10);
+  auto n = arr->NumElements();
+  for (size_t i = 0; i < n; i++)
+    arr->data()[i] = hwy::bfloat16_t::FromBits(dis_int16(gen));
+}
+
+template <class TConfig>
+void RandomizeCompressedWeights(CompressedWeights<TConfig> *c_weights) {
+  std::default_random_engine gen;
+  std::uniform_int_distribution<int16_t> dis_int16(0, 10);
+
+  RandomizeCompressedArrayBF16(&c_weights->c_embedder_input_embedding);
+  RandomizeCompressedArrayBF16(&c_weights->c_final_norm_scale);
+
+  for (auto& layer : c_weights->c_layer_ptrs.c_layers) {
+    auto* c_layer = layer.get();
+    RandomizeCompressedArrayBF16(&c_layer->c_pre_attention_norm_scale);
+    RandomizeCompressedArrayBF16(&c_layer->c_pre_ffw_norm_scale);
+    RandomizeCompressedArrayBF16(&c_layer->c_gating_einsum_w);
+    RandomizeCompressedArrayBF16(&c_layer->c_linear_w);
+    RandomizeCompressedArrayBF16(&c_layer->c_qkv_einsum_w);
+    RandomizeCompressedArrayBF16(&c_layer->c_attn_vec_einsum_w);
+  }
+}
+
 template <class TConfig>
 void RunBenchmark() {
   const char* inner_steps_env = getenv("CHERRYBENCH_LOOP_STEPS");
@@ -396,12 +425,13 @@ void RunBenchmark() {
 
   hwy::ThreadPool pool(1);
 
+  // Initialize buffers (which will be re-used).
   using CWeights = CompressedWeights<TConfig>;
   hwy::AlignedFreeUniquePtr<uint8_t[]> c_weights_u8 =
       hwy::AllocateAligned<uint8_t>(sizeof(CWeights));
   CWeights* c_weights = reinterpret_cast<CWeights*>(c_weights_u8.get());
   new (&c_weights->c_layer_ptrs) CompressedLayerPointers<TConfig>(pool);
-  // RandomizeCompressedWeights(c_weights);
+  RandomizeCompressedWeights(c_weights);
   Activations<TConfig, 1> activations;
   RandomizeActivations<TConfig>(&activations);
   auto kv_cache =
