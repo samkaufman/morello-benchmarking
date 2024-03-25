@@ -10,6 +10,15 @@ declare -r MORELLO_HASH=$(
     curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
     jq -r '.commit.sha')
 
+echo '[[jobs]]'
+echo 'name = "gemma-decode-2b"'
+echo "size = 1"
+echo 'batch_size = 1'
+echo "backend_name = \"gemma.cpp\""
+echo "docker_path = \"./gemma.cpp/decode\""
+echo "command = []"
+echo ""
+
 for i in "${matmul_oneoff_sizes[@]}"; do
 echo '[[jobs]]'
 echo 'name = "matmul-u8s8s16"'
