@@ -4,6 +4,7 @@ set -e
 declare -a morello_matmul_sizes=("8")
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_sizes=("8" "64" "128" "256" "512" "1024" "2048")
+declare -a matmul_chain_sizes=("${matmul_sizes[@]}")
 
 # Get the latest commit hash of the main branch
 declare -r MORELLO_HASH=$(
@@ -62,6 +63,17 @@ for b in "tvm" "eigen"; do
     echo "command = [ \"$i\" ]"
     echo ""
 done
+done
+
+for i in "${matmul_chain_sizes[@]}"; do
+echo '[[jobs]]'
+echo 'name = "matmul-chain-f32"'
+echo "size = $i"
+echo 'batch_size = 1'
+echo 'backend_name = "torch"'
+echo 'docker_path = "./torch"'
+echo "command = [ \"$i\" ]"
+echo ""
 done
 
 echo '[reporters.google_sheets]'
