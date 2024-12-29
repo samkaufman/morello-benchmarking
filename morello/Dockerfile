@@ -18,7 +18,7 @@ RUN git clone https://github.com/samkaufman/morello.git \
     && git checkout $MORELLO_VERSION \
     && git submodule update --init --recursive
 WORKDIR /morello
-RUN cargo build --release
+RUN cargo build --release -F verification
 ENV CLANG=/usr/bin/clang-18
 COPY ./run_reformat.sh /
 ENTRYPOINT ["/run_reformat.sh"]
