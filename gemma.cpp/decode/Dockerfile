@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:mantic AS base
+FROM ubuntu:noble AS base
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl gzip \
-      llvm-17 llvm-17-dev clang++-17 lld-17 \
+      llvm-18 llvm-18-dev clang++-18 lld-18 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -19,8 +19,8 @@ COPY gemma_tiny ./
 
 RUN cmake -DHWY_ENABLE_TESTS=OFF -DHWY_ENABLE_EXAMPLES=OFF \
     -DWEIGHT_TYPE=hwy::bfloat16_t \
-    -DCMAKE_C_COMPILER=clang-17 -DCMAKE_C_FLAGS="-O3 -march=core-avx2" \
-    -DCMAKE_CXX_COMPILER=clang++-17 -DCMAKE_CXX_FLAGS="-O3 -march=core-avx2" \
+    -DCMAKE_C_COMPILER=clang-18 -DCMAKE_C_FLAGS="-O3 -march=core-avx2" \
+    -DCMAKE_CXX_COMPILER=clang++-18 -DCMAKE_CXX_FLAGS="-O3 -march=core-avx2" \
     -DCMAKE_BUILD_TYPE=Release -B build
 RUN make -j -C build
 

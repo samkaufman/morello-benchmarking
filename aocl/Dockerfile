@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:mantic AS base
+FROM ubuntu:noble AS base
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates git curl \
-      build-essential llvm-17 llvm-17-dev clang-17 lld-17 libomp-17-dev \
+      build-essential llvm-18 llvm-18-dev clang-18 lld-18 libomp-18-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

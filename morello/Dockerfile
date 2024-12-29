@@ -1,13 +1,13 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:mantic AS base
+FROM ubuntu:noble AS base
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates git curl \
-      build-essential llvm-17 llvm-17-dev clang-17 lld-17 libomp-17-dev \
+      build-essential llvm-18 llvm-18-dev clang-18 lld-18 libomp-18-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ARG RUST_VERSION=1.75.0
+ARG RUST_VERSION=1.83.0
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain "$RUST_VERSION" -y
 ENV PATH=/root/.cargo/bin:$PATH
 
@@ -19,6 +19,6 @@ RUN git clone https://github.com/samkaufman/morello.git \
     && git submodule update --init --recursive
 WORKDIR /morello
 RUN cargo build --release
-ENV CLANG /usr/bin/clang-17
+ENV CLANG=/usr/bin/clang-18
 COPY ./run_reformat.sh /
 ENTRYPOINT ["/run_reformat.sh"]

@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM ubuntu:mantic AS base
+FROM ubuntu:noble AS base
 
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
