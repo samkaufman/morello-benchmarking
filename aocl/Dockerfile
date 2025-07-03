@@ -29,7 +29,7 @@ RUN make install
 FROM base
 COPY --from=build-aocl /opt/aocl /opt/aocl
 WORKDIR /app
-COPY aocl_bench.cpp build_and_run.sh ./
+COPY aocl_bench_u8s8s16.cpp aocl_bench_f32.cpp build_and_run.sh ./
 RUN chmod u=rx,g=,o= build_and_run.sh
 ENV BLIS_ARCH_DEBUG=1 BLIS_NUM_THREADS=1 LD_LIBRARY_PATH=/opt/aocl/lib
 ENTRYPOINT ["./build_and_run.sh"]

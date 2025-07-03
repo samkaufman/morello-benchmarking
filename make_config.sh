@@ -50,7 +50,16 @@ echo "size = $i"
 echo 'batch_size = 1'
 echo 'backend_name = "aocl"'
 echo 'docker_path = "./aocl"'
-echo "command = [ \"$i\" ]"
+echo "command = [ \"u8s8s16\", \"$i\" ]"
+echo ""
+
+echo '[[jobs]]'
+echo 'name = "matmul-f32"'
+echo "size = $i"
+echo 'batch_size = 1'
+echo 'backend_name = "aocl"'
+echo 'docker_path = "./aocl"'
+echo "command = [ \"f32\", \"$i\" ]"
 echo ""
 
 for b in "tvm" "eigen"; do
