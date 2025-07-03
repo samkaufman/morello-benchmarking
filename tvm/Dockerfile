@@ -6,16 +6,14 @@ RUN apt-get update \
       ca-certificates \
       git python3.12 python3.12-dev python3-setuptools libtinfo-dev \
       python3-numpy python3-decorator python3-attr python3-scipy \
-      python3-psutil python3-typing-extensions \
+      python3-psutil python3-typing-extensions cython3 \
       zlib1g-dev build-essential cmake libedit-dev libxml2-dev ninja-build \
       llvm-18 llvm-18-dev clang-18 lld-18 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Download TVM v0.14.0 (7315c9d)
-RUN git clone --recursive https://github.com/apache/tvm.git /tvm \
-    && cd /tvm \
-    git checkout 7315c9d
+RUN git clone --recursive --branch v0.20.0 --depth 1 https://github.com/apache/tvm.git /tvm
 WORKDIR /tvm
 
 # Build TVM
