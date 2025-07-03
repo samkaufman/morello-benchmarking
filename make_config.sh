@@ -3,7 +3,7 @@ set -e
 
 declare -a morello_matmul_sizes=("8")
 declare -a matmul_oneoff_sizes=("64" "128")
-declare -a matmul_sizes=("8" "64" "128" "256" "512" "1024" "2048")
+declare -a matmul_sizes=($(seq 128 2048))
 declare -a matmul_chain_sizes=("${matmul_sizes[@]}")
 
 # Get the latest commit hash of the main branch
