@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-poetry install --sync -C ./cherrybench
+poetry sync -C ./cherrybench
 
 tmpdir="$(mktemp -d)"
 ./make_config.sh > "$tmpdir/config.toml"

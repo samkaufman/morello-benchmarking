@@ -16,7 +16,7 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 # TODO: put in /usr/src?
-RUN git clone https://github.com/amd/blis.git /blis-src
+RUN git clone --branch 4.2 --depth 1 https://github.com/amd/blis.git /blis-src
 WORKDIR /blis-src
 RUN ./configure --prefix=/opt/aocl \
     -a aocl_gemm --enable-cblas --enable-threading=openmp \
