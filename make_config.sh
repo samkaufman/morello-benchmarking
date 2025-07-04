@@ -60,10 +60,15 @@ echo '[[jobs]]'
 echo 'name = "matmul-f32"'
 echo "size = $i"
 echo 'batch_size = 1'
+gflops_value=$(echo "scale=6; 2 * $i * $i * $i / 1000000000" | bc -l)
+# Ensure proper decimal format (add leading 0 if missing)
+if [[ $gflops_value == .* ]]; then
+    gflops_value="0$gflops_value"
+fi
+echo "gflops = $gflops_value"
 echo 'backend_name = "aocl-4.2"'
 echo 'docker_path = "./aocl"'
 echo "command = [ \"f32\", \"$i\" ]"
-echo "gflops = $(echo "scale=10; 2 * $i * $i * $i / 1000000000" | bc -l)"
 echo ""
 
 for b in "tvm" "eigen"; do
