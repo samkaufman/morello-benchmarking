@@ -63,6 +63,7 @@ echo 'batch_size = 1'
 echo 'backend_name = "aocl-4.2"'
 echo 'docker_path = "./aocl"'
 echo "command = [ \"f32\", \"$i\" ]"
+echo "gflops = $(echo "scale=10; 2 * $i * $i * $i / 1000000000" | bc -l)"
 echo ""
 
 for b in "tvm" "eigen"; do
