@@ -11,6 +11,9 @@ declare -r MORELLO_HASH=$(
     curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
     jq -r '.commit.sha')
 
+echo "max_work_time = 10800"  # 3 hours in seconds
+echo ""
+
 echo '[[jobs]]'
 echo 'name = "gemma-decode-2b"'
 echo "size = 1"
