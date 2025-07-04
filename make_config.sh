@@ -31,17 +31,20 @@ echo "command = []"
 echo ""
 done
 
-for i in "${morello_matmul_sizes[@]}"; do
-echo '[[jobs]]'
-echo 'name = "matmul"'
-echo "size = $i"
-echo 'batch_size = 1'
-echo "backend_name = \"morello\""
-echo "docker_path = \"./morello\""
-echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-echo "command = [ \"matmul\", \"$i\" ]"
-echo ""
-done
+# Temporarily disable Morello matmuls. Synthesis is too slow on HEAD.
+# TODO: Re-enable.
+#
+# for i in "${morello_matmul_sizes[@]}"; do
+# echo '[[jobs]]'
+# echo 'name = "matmul"'
+# echo "size = $i"
+# echo 'batch_size = 1'
+# echo "backend_name = \"morello\""
+# echo "docker_path = \"./morello\""
+# echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+# echo "command = [ \"matmul\", \"$i\" ]"
+# echo ""
+# done
 
 for i in "${matmul_sizes[@]}"; do
 echo '[[jobs]]'
