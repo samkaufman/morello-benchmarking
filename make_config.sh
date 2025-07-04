@@ -3,8 +3,35 @@ set -e
 
 declare -a morello_matmul_sizes=("8")
 declare -a matmul_oneoff_sizes=("64" "128")
-declare -a matmul_sizes=($(seq 128 2048))
 declare -a matmul_chain_sizes=("${matmul_sizes[@]}")
+
+# Define sub-ranges for each day of the week to smooth benchmarking load
+# Total range: 128-2048 (1921 sizes), divided into 7 roughly equal parts (~274 sizes each)
+day_of_week=$(date +%w)
+case $day_of_week in
+    0) # Sunday
+        mapfile -t matmul_sizes < <(seq 128 401)
+        ;;
+    1) # Monday  
+        mapfile -t matmul_sizes < <(seq 402 675)
+        ;;
+    2) # Tuesday
+        mapfile -t matmul_sizes < <(seq 676 949)
+        ;;
+    3) # Wednesday
+        mapfile -t matmul_sizes < <(seq 950 1223)
+        ;;
+    4) # Thursday
+        mapfile -t matmul_sizes < <(seq 1224 1497)
+        ;;
+    5) # Friday
+        mapfile -t matmul_sizes < <(seq 1498 1771)
+        ;;
+    6) # Saturday
+        mapfile -t matmul_sizes < <(seq 1772 2048)
+        ;;
+esac
+
 
 # Get the latest commit hash of the main branch
 declare -r MORELLO_HASH=$(
