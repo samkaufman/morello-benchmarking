@@ -17,6 +17,7 @@ BN = 32
 K_FACTOR = 4
 DTYPE = "uint32"
 
+
 def main():
     logging.basicConfig(level=logging.INFO)
 
@@ -64,9 +65,7 @@ def make_net(m, k, n):
     B = te.placeholder((1, k, n), dtype=DTYPE, name="B")
 
     with tvm.target.Target(TARGET):
-        matmul_algo = topi.nn.batch_matmul(A, B)
-        # s = topi.x86.schedule_matmul_mkl(matmul_algo)
-        s = topi.generic.schedule_batch_matmul(matmul_algo)
+        s = topi.nn.batch_matmul(A, B)
 
     func = tvm.build(s, [A, B], target=TARGET, name="mmult")
     lowered = tvm.lower(s, [A, B], simple_mode=True)
@@ -81,11 +80,15 @@ def make_net(m, k, n):
     A = te.placeholder((m, k), dtype=DTYPE, name="A")
     B = te.placeholder((k, n), dtype=DTYPE, name="B")
     packedB = te.compute(
-        (n / BN, k, BN), lambda bigN, k, littleN: B[k, bigN * BN + littleN], name="packedB"
+        (n / BN, k, BN),
+        lambda bigN, k, littleN: B[k, bigN * BN + littleN],
+        name="packedB",
     )
     C = te.compute(
         (m, n),
-        lambda m, n: te.sum(A[m, k] * packedB[n // BN, k, tvm.tir.indexmod(n, BN)], axis=k_reduction),
+        lambda m, n: te.sum(
+            A[m, k] * packedB[n // BN, k, tvm.tir.indexmod(n, BN)], axis=k_reduction
+        ),
         name="C",
     )
 
