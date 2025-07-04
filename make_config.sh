@@ -73,7 +73,7 @@ echo ""
 
 for b in "tvm" "eigen"; do
     echo '[[jobs]]'
-    echo 'name = "matmul"'
+    echo 'name = "matmul-u32"'
     echo "size = $i"
     echo 'batch_size = 1'
     echo "backend_name = \"$b\""
