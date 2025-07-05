@@ -5,6 +5,18 @@ declare -a morello_matmul_sizes=("8")
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("${matmul_sizes[@]}")
 
+# Function to calculate GFLOPS for f32 matrix multiplication
+# Formula: 2 * size^3 / 1,000,000,000 (for square matrices)
+calculate_gflops() {
+    local size=$1
+    local gflops_value=$(echo "scale=6; 2 * $size * $size * $size / 1000000000" | bc -l)
+    # Ensure proper decimal format (add leading 0 if missing)
+    if [[ $gflops_value == .* ]]; then
+        gflops_value="0$gflops_value"
+    fi
+    echo "$gflops_value"
+}
+
 # Define sub-ranges for each day of the week to smooth benchmarking load
 # Total range: 128-2048 (1921 sizes), divided into 7 roughly equal parts (~274 sizes each)
 day_of_week=$(date +%w)
@@ -61,6 +73,18 @@ echo "command = []"
 echo ""
 done
 
+echo '[[jobs]]'
+echo 'name = "matmul-f32"'
+echo "size = 2048"
+echo 'batch_size = 1'
+gflops_value=$(calculate_gflops "2048")
+echo "gflops = $gflops_value"
+echo "backend_name = \"morello\""
+echo "docker_path = \"./morello\""
+echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+echo "command = [ \"/run_matmul_x86_example.sh\" ]"
+echo ""
+
 # Temporarily disable Morello matmuls. Synthesis is too slow on HEAD.
 # TODO: Re-enable.
 #
@@ -72,7 +96,7 @@ done
 # echo "backend_name = \"morello\""
 # echo "docker_path = \"./morello\""
 # echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-# echo "command = [ \"matmul\", \"$i\" ]"
+# echo "command = [ \"/run_bench.sh\", \"matmul\", \"$i\" ]"
 # echo ""
 # done
 
@@ -90,11 +114,7 @@ echo '[[jobs]]'
 echo 'name = "matmul-f32"'
 echo "size = $i"
 echo 'batch_size = 1'
-gflops_value=$(echo "scale=6; 2 * $i * $i * $i / 1000000000" | bc -l)
-# Ensure proper decimal format (add leading 0 if missing)
-if [[ $gflops_value == .* ]]; then
-    gflops_value="0$gflops_value"
-fi
+gflops_value=$(calculate_gflops $i)
 echo "gflops = $gflops_value"
 echo 'backend_name = "aocl-4.2"'
 echo 'docker_path = "./aocl"'
