@@ -18,9 +18,8 @@ RUN git clone https://github.com/samkaufman/morello.git
 WORKDIR /morello
 RUN git checkout $MORELLO_VERSION && \
     git submodule update --init --recursive
-RUN sed -i 's/^\([[:space:]]*\)const ITERS: u32 = 10;$/\1let ITERS: u32 = std::env::var("CHERRYBENCH_LOOP_STEPS").unwrap().parse::<u32>().unwrap();/' ./morello/examples/matmul_x86.rs && \
-  sed -i 's/^\([[:space:]]*\)(result\.best_inner_loop_runtime() \/ result\.inner_loop_iterations)\.as_secs_f64();$/\1result.best_inner_loop_runtime().as_secs_f64();/' ./morello/examples/matmul_x86.rs && \
-  grep -q 'result\.best_inner_loop_runtime()\.as_secs_f64();' ./morello/examples/matmul_x86.rs
+COPY ./matmul_x86_benchmarking.patch ./
+RUN git apply matmul_x86_benchmarking.patch
 RUN cargo build --release --no-default-features && \
     cargo build --release --no-default-features --example matmul_x86
 ENV CLANG=/usr/bin/clang-18
