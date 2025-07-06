@@ -6,8 +6,8 @@
 #include <iostream>
 #include "blis.h"
 
-constexpr int32_t alpha = 2;
-constexpr int32_t beta = 9;
+constexpr int32_t alpha = 1;
+constexpr int32_t beta = 1;
 constexpr char storage = 'r'; // Row major.
 constexpr char transa = 'n';  // No transpose.
 constexpr char transb = 'n';

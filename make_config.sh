@@ -101,13 +101,39 @@ echo ""
 # done
 
 for i in "${matmul_sizes[@]}"; do
+for aocl_version in "4.1" "4.2"; do
 echo '[[jobs]]'
 echo 'name = "matmul-u8s8s16"'
 echo "size = $i"
 echo 'batch_size = 1'
-echo 'backend_name = "aocl-4.2"'
+echo "backend_name = \"aocl-$aocl_version\""
 echo 'docker_path = "./aocl"'
+echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
 echo "command = [ \"u8s8s16\", \"$i\" ]"
+echo ""
+done
+
+for aocl_version in "4.1" "4.2"; do
+echo '[[jobs]]'
+echo 'name = "matmul-f32"'
+echo "size = $i"
+echo 'batch_size = 1'
+gflops_value=$(calculate_gflops $i)
+echo "gflops = $gflops_value"
+echo "backend_name = \"aocl-$aocl_version\""
+echo 'docker_path = "./aocl"'
+echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
+echo "command = [ \"f32\", \"$i\" ]"
+echo ""
+done
+
+echo '[[jobs]]'
+echo 'name = "matmul-u8s8s32"'
+echo "size = $i"
+echo 'batch_size = 1'
+echo 'backend_name = "intel-mkl"'
+echo 'docker_path = "./intel-mkl"'
+echo "command = [ \"u8s8s32\", \"$i\" ]"
 echo ""
 
 echo '[[jobs]]'
@@ -116,8 +142,8 @@ echo "size = $i"
 echo 'batch_size = 1'
 gflops_value=$(calculate_gflops $i)
 echo "gflops = $gflops_value"
-echo 'backend_name = "aocl-4.2"'
-echo 'docker_path = "./aocl"'
+echo 'backend_name = "intel-mkl"'
+echo 'docker_path = "./intel-mkl"'
 echo "command = [ \"f32\", \"$i\" ]"
 echo ""
 

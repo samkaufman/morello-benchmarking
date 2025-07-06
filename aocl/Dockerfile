@@ -10,13 +10,14 @@ RUN apt-get update \
 
 # Install AOCL
 FROM base AS build-aocl
+ARG AOCL_VERSION
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       gcc g++ \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 # TODO: put in /usr/src?
-RUN git clone --branch 4.2 --depth 1 https://github.com/amd/blis.git /blis-src
+RUN git clone --branch ${AOCL_VERSION} --depth 1 https://github.com/amd/blis.git /blis-src
 WORKDIR /blis-src
 RUN ./configure --prefix=/opt/aocl \
     -a aocl_gemm --enable-cblas --enable-threading=openmp \

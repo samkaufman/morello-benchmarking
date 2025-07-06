@@ -4,19 +4,19 @@
 #include <chrono>
 #include <random>
 #include <iostream>
-#include "cblas.h"
+#include "mkl_cblas.h"
 
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
 
-constexpr dim_t m = PROBLEM_SIZE;
-constexpr dim_t n = PROBLEM_SIZE;
-constexpr dim_t k = PROBLEM_SIZE;
+constexpr MKL_INT m = PROBLEM_SIZE;
+constexpr MKL_INT n = PROBLEM_SIZE;
+constexpr MKL_INT k = PROBLEM_SIZE;
 
 // Leading dimensions for row-major storage
-constexpr dim_t lda = k;
-constexpr dim_t ldb = n;
-constexpr dim_t ldc = n;
+constexpr MKL_INT lda = k;
+constexpr MKL_INT ldb = n;
+constexpr MKL_INT ldc = n;
 
 __attribute__((noinline))
 void kernel(float *a, float *b, float *c) {
