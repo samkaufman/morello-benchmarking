@@ -9,17 +9,13 @@
 constexpr MKL_INT32 alpha = 1;
 constexpr MKL_INT32 beta = 1;
 
-constexpr MKL_INT m = PROBLEM_SIZE;
-constexpr MKL_INT n = PROBLEM_SIZE;
-constexpr MKL_INT k = PROBLEM_SIZE;
-
-// Leading dimensions for row-major storage
-constexpr MKL_INT lda = k;
-constexpr MKL_INT ldb = n;
-constexpr MKL_INT ldc = n;
-
 __attribute__((noinline))
-void kernel(MKL_UINT8 *a, MKL_INT8 *b, MKL_INT32 *c) {
+void kernel(MKL_UINT8 *a, MKL_INT8 *b, MKL_INT32 *c, MKL_INT m, MKL_INT n, MKL_INT k) {
+    // Leading dimensions for row-major storage
+    MKL_INT lda = k;
+    MKL_INT ldb = n;
+    MKL_INT ldc = n;
+    
     // Per the documentation, when using CblasRowMajor, the types for A and B are swapped,
     // so, despite the name, the following is really a u8s8s32 operation.
     MKL_INT32 co = 0;
@@ -33,7 +29,15 @@ void kernel(MKL_UINT8 *a, MKL_INT8 *b, MKL_INT32 *c) {
                        &co);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <m> <k> <n>" << std::endl;
+        exit(1);
+    }
+    
+    MKL_INT m = std::stoi(argv[1]);
+    MKL_INT k = std::stoi(argv[2]);
+    MKL_INT n = std::stoi(argv[3]);
     const char* inner_steps_env = std::getenv("CHERRYBENCH_LOOP_STEPS");
     if (inner_steps_env == nullptr) {
         std::cerr << "CHERRYBENCH_LOOP_STEPS is not set" << std::endl;
@@ -69,11 +73,11 @@ int main() {
         b[i] = static_cast<MKL_INT8>(b_distribution(generator));
     }
 
-    kernel(a, b, c);  // Warm-up
+    kernel(a, b, c, m, n, k);  // Warm-up
     for (unsigned int i = 0; i < 10; i++) {
         auto start = std::chrono::high_resolution_clock::now();
         for (unsigned int j = 0; j < inner_steps; j++)
-            kernel(a, b, c);
+            kernel(a, b, c, m, n, k);
         auto elapsed = std::chrono::high_resolution_clock::now() - start;
         std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()
              << "ns" << std::endl;

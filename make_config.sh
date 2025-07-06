@@ -3,13 +3,15 @@ set -e
 
 declare -a morello_matmul_sizes=("8")
 declare -a matmul_oneoff_sizes=("64" "128")
-declare -a matmul_chain_sizes=("${matmul_sizes[@]}")
+declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 
 # Function to calculate GFLOPS for f32 matrix multiplication
-# Formula: 2 * size^3 / 1,000,000,000 (for square matrices)
+# Formula: 2 * M * K * N / 1,000,000,000
 calculate_gflops() {
-    local size=$1
-    local gflops_value=$(echo "scale=6; 2 * $size * $size * $size / 1000000000" | bc -l)
+    local m=$1
+    local k=$2
+    local n=$3
+    local gflops_value=$(echo "scale=6; 2 * $m * $k * $n / 1000000000" | bc -l)
     # Ensure proper decimal format (add leading 0 if missing)
     if [[ $gflops_value == .* ]]; then
         gflops_value="0$gflops_value"
@@ -17,32 +19,49 @@ calculate_gflops() {
     echo "$gflops_value"
 }
 
-# Define sub-ranges for each day of the week to smooth benchmarking load
-# Total range: 128-2048 (1921 sizes), divided into 7 roughly equal parts (~274 sizes each)
+# mkn_combinations: all combinations of power-of-two sizes
+declare -a power_of_two_sizes=(64 128 256 512 1024)
+declare -a mkn_combinations=()
+
+# First, add all power-of-two combinations
+for m in "${power_of_two_sizes[@]}"; do
+for k in "${power_of_two_sizes[@]}"; do
+for n in "${power_of_two_sizes[@]}"; do
+    mkn_combinations+=("$m,$k,$n")
+done
+done
+done
+
+# Then add non-power-of-two square sizes
 day_of_week=$(date +%w)
+declare -a powers_of_two=(128 256 512 1024 2048)
 case $day_of_week in
     0) # Sunday
-        mapfile -t matmul_sizes < <(seq 128 401)
+        mapfile -t day_specific_sizes < <(seq 128 13 401)
         ;;
-    1) # Monday  
-        mapfile -t matmul_sizes < <(seq 402 675)
+    1) # Monday
+        mapfile -t day_specific_sizes < <(seq 402 13 675)
         ;;
     2) # Tuesday
-        mapfile -t matmul_sizes < <(seq 676 949)
+        mapfile -t day_specific_sizes < <(seq 676 13 949)
         ;;
     3) # Wednesday
-        mapfile -t matmul_sizes < <(seq 950 1223)
+        mapfile -t day_specific_sizes < <(seq 950 13 1223)
         ;;
     4) # Thursday
-        mapfile -t matmul_sizes < <(seq 1224 1497)
+        mapfile -t day_specific_sizes < <(seq 1224 13 1497)
         ;;
     5) # Friday
-        mapfile -t matmul_sizes < <(seq 1498 1771)
+        mapfile -t day_specific_sizes < <(seq 1498 13 1771)
         ;;
     6) # Saturday
-        mapfile -t matmul_sizes < <(seq 1772 2048)
+        mapfile -t day_specific_sizes < <(seq 1772 13 2048)
         ;;
 esac
+mapfile -t weekly_square_sizes < <(printf "%s\n" "${day_specific_sizes[@]}" "${powers_of_two[@]}" | sort -un)
+for size in "${weekly_square_sizes[@]}"; do
+    mkn_combinations+=("$size,$size,$size")
+done
 
 
 # Get the latest commit hash of the main branch
@@ -74,10 +93,10 @@ echo ""
 done
 
 echo '[[jobs]]'
-echo 'name = "matmul-f32"'
+echo 'name = "matmul-f32-2048x2048x2048"'
 echo "size = 2048"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops "2048")
+gflops_value=$(calculate_gflops "2048" "2048" "2048")
 echo "gflops = $gflops_value"
 echo "backend_name = \"morello\""
 echo "docker_path = \"./morello\""
@@ -100,62 +119,66 @@ echo ""
 # echo ""
 # done
 
-for i in "${matmul_sizes[@]}"; do
+for mkn in "${mkn_combinations[@]}"; do
+IFS=',' read -r m k n <<< "$mkn"
+    
 for aocl_version in "4.1" "4.2"; do
 echo '[[jobs]]'
-echo 'name = "matmul-u8s8s16"'
-echo "size = $i"
+echo "name = \"matmul-u8s8s16-${m}x${k}x${n}\""
+echo "size = $m"
 echo 'batch_size = 1'
 echo "backend_name = \"aocl-$aocl_version\""
 echo 'docker_path = "./aocl"'
 echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
-echo "command = [ \"u8s8s16\", \"$i\" ]"
+echo "command = [ \"u8s8s16\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
-done
 
-for aocl_version in "4.1" "4.2"; do
 echo '[[jobs]]'
-echo 'name = "matmul-f32"'
-echo "size = $i"
+echo "name = \"matmul-f32-${m}x${k}x${n}\""
+echo "size = $m"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops $i)
+gflops_value=$(calculate_gflops "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo "backend_name = \"aocl-$aocl_version\""
 echo 'docker_path = "./aocl"'
 echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
-echo "command = [ \"f32\", \"$i\" ]"
+echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 done
 
 echo '[[jobs]]'
-echo 'name = "matmul-u8s8s32"'
-echo "size = $i"
+echo "name = \"matmul-u8s8s32-${m}x${k}x${n}\""
+echo "size = $m"
 echo 'batch_size = 1'
 echo 'backend_name = "intel-mkl"'
 echo 'docker_path = "./intel-mkl"'
-echo "command = [ \"u8s8s32\", \"$i\" ]"
+echo "command = [ \"u8s8s32\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 
 echo '[[jobs]]'
-echo 'name = "matmul-f32"'
-echo "size = $i"
+echo "name = \"matmul-f32-${m}x${k}x${n}\""
+echo "size = $m"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops $i)
+gflops_value=$(calculate_gflops "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo 'backend_name = "intel-mkl"'
 echo 'docker_path = "./intel-mkl"'
-echo "command = [ \"f32\", \"$i\" ]"
+echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 
 for b in "tvm" "eigen"; do
-    echo '[[jobs]]'
-    echo 'name = "matmul-u32"'
-    echo "size = $i"
-    echo 'batch_size = 1'
-    echo "backend_name = \"$b\""
-    echo "docker_path = \"./$b\""
-    echo "command = [ \"$i\" ]"
-    echo ""
+    # only square matrix jobs for tvm/eigen
+    # TODO: Support non-square shapes.
+    if [ "$m" -eq "$k" ] && [ "$k" -eq "$n" ]; then
+        echo '[[jobs]]'
+        echo "name = \"matmul-u32-${m}x${k}x${n}\""
+        echo "size = $m"
+        echo 'batch_size = 1'
+        echo "backend_name = \"$b\""
+        echo "docker_path = \"./$b\""
+        echo "command = [ \"$m\" ]"
+        echo ""
+    fi
 done
 done
 
@@ -171,6 +194,6 @@ echo ""
 done
 
 echo '[reporters.google_sheets]'
-echo 'key_file = "../morellosecrets/morello-339002-7f91851fee55.json"'
+echo 'key_file = "../../morellosecrets/morello-339002-7f91851fee55.json"'
 echo 'sheet_name = "Morello Performance Benchmarks"'
 echo 'folder_name = "BETA"'

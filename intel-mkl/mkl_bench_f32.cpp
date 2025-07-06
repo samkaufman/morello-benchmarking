@@ -9,17 +9,13 @@
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
 
-constexpr MKL_INT m = PROBLEM_SIZE;
-constexpr MKL_INT n = PROBLEM_SIZE;
-constexpr MKL_INT k = PROBLEM_SIZE;
-
-// Leading dimensions for row-major storage
-constexpr MKL_INT lda = k;
-constexpr MKL_INT ldb = n;
-constexpr MKL_INT ldc = n;
-
 __attribute__((noinline))
-void kernel(float *a, float *b, float *c) {
+void kernel(float *a, float *b, float *c, MKL_INT m, MKL_INT n, MKL_INT k) {
+    // Leading dimensions for row-major storage
+    MKL_INT lda = k;
+    MKL_INT ldb = n;
+    MKL_INT ldc = n;
+    
     cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
                 m, n, k, alpha,
                 a, lda,
@@ -27,7 +23,15 @@ void kernel(float *a, float *b, float *c) {
                 beta, c, ldc);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc != 4) {
+        std::cerr << "Usage: " << argv[0] << " <m> <k> <n>" << std::endl;
+        exit(1);
+    }
+    
+    MKL_INT m = std::stoi(argv[1]);
+    MKL_INT k = std::stoi(argv[2]);
+    MKL_INT n = std::stoi(argv[3]);
     const char* inner_steps_env = std::getenv("CHERRYBENCH_LOOP_STEPS");
     if (inner_steps_env == nullptr) {
         std::cerr << "CHERRYBENCH_LOOP_STEPS is not set" << std::endl;
@@ -61,11 +65,11 @@ int main() {
         b[i] = distribution(generator);
     }
 
-    kernel(a, b, c);  // Warm-up
+    kernel(a, b, c, m, n, k);  // Warm-up
     for (unsigned int i = 0; i < 10; i++) {
         auto start = std::chrono::high_resolution_clock::now();
         for (unsigned int j = 0; j < inner_steps; j++)
-            kernel(a, b, c);
+            kernel(a, b, c, m, n, k);
         auto elapsed = std::chrono::high_resolution_clock::now() - start;
         std::cout << std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()
              << "ns" << std::endl;
