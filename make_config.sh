@@ -70,6 +70,7 @@ declare -r MORELLO_HASH=$(
     jq -r '.commit.sha')
 
 echo "max_work_time = 10800"  # 3 hours in seconds
+echo "order = \"random\""
 echo ""
 
 echo '[[jobs]]'
