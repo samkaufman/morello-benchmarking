@@ -64,10 +64,11 @@ for size in "${weekly_square_sizes[@]}"; do
 done
 
 
-# Get the latest commit hash of the main branch
-declare -r MORELLO_HASH=$(
-    curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
-    jq -r '.commit.sha')
+# TODO: Use the latest commit hash of the weird-tiling2 branch
+# declare -r MORELLO_HASH=$(
+#     curl -s "https://api.github.com/repos/samkaufman/morello/branches/weird-tiling2" |
+#     jq -r '.commit.sha')
+declare -r MORELLO_HASH="3630e76e"
 
 echo "max_work_time = 10800"  # 3 hours in seconds
 echo "order = \"random\""
@@ -93,17 +94,23 @@ echo "command = []"
 echo ""
 done
 
+for m in 64 128 256 512 1024 2048; do
+for k in 64 128 256 512 1024 2048; do
+for n in 64 128 256 512 1024 2048; do
 echo '[[jobs]]'
-echo 'name = "matmul-f32-2048x2048x2048"'
-echo "size = 2048"
+echo "name = \"matmul-f32-${m}x${k}x${n}\""
+echo "size = $n"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops "2048" "2048" "2048")
+gflops_value=$(calculate_gflops "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo "backend_name = \"morello\""
 echo "docker_path = \"./morello\""
 echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-echo "command = [ \"/run_matmul_x86_example.sh\" ]"
+echo "command = [ \"/run_matmul_x86_example.sh\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
+done
+done
+done
 
 # Temporarily disable Morello matmuls. Synthesis is too slow on HEAD.
 # TODO: Re-enable.
