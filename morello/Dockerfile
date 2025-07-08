@@ -18,14 +18,24 @@ RUN git clone https://github.com/samkaufman/morello.git
 WORKDIR /morello
 RUN git checkout $MORELLO_VERSION && \
     git submodule update --init --recursive
-COPY ./matmul_x86_benchmarking.patch ./
-RUN git apply matmul_x86_benchmarking.patch
 RUN sed -i 's/^fn apply_to_leaf_spec/pub fn apply_to_leaf_spec/' morello/src/scheduling_sugar.rs
+COPY ./openmp.patch ./
+RUN git apply openmp.patch
+RUN cargo build --release --no-default-features
+
+COPY ./matmul_x86_benchmarking.patch ./matmul_batch_parallel_x86_benchmarking.patch ./
+RUN git apply matmul_x86_benchmarking.patch
+RUN git apply matmul_batch_parallel_x86_benchmarking.patch
 RUN sed -i -E 's/\.split\(([0-9]+)\)/.split_saturating(\1)/g' morello/examples/matmul_x86.rs
 RUN sed -i -E 's/\.tile_out\(([^)]+)\)/.tile_out_saturating(\1)/g' morello/examples/matmul_x86.rs
+RUN sed -i -E 's/\.split\(([0-9]+)\)/.split_saturating(\1)/g' morello/examples/matmul_batch_parallel_x86.rs
+RUN sed -i -E 's/\.tile_out\(([^)]+)\)/.tile_out_saturating(\1)/g' morello/examples/matmul_batch_parallel_x86.rs
+
 COPY ./new_epi_matmul_x86.rs /
 RUN cat /new_epi_matmul_x86.rs >> morello/examples/matmul_x86.rs
-RUN cargo build --release --no-default-features && \
-    cargo build --release --no-default-features --example matmul_x86
+RUN cat /new_epi_matmul_x86.rs >> morello/examples/matmul_batch_parallel_x86.rs
+
+RUN cargo build --release --no-default-features --example matmul_x86 && \
+    cargo build --release --no-default-features --example matmul_batch_parallel_x86
 ENV CLANG=/usr/bin/clang-18
-COPY ./run_bench.sh ./run_matmul_x86_example.sh /
+COPY ./run_bench.sh ./run_matmul_x86_example.sh ./run_matmul_batch_parallel_x86_example.sh /

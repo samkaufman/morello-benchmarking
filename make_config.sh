@@ -8,10 +8,11 @@ declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 # Function to calculate GFLOPS for f32 matrix multiplication
 # Formula: 2 * M * K * N / 1,000,000,000
 calculate_gflops() {
-    local m=$1
-    local k=$2
-    local n=$3
-    local gflops_value=$(echo "scale=6; 2 * $m * $k * $n / 1000000000" | bc -l)
+    local b=$1
+    local m=$2
+    local k=$3
+    local n=$4
+    local gflops_value=$(echo "scale=6; 2 * $b * $m * $k * $n / 1000000000" | bc -l)
     # Ensure proper decimal format (add leading 0 if missing)
     if [[ $gflops_value == .* ]]; then
         gflops_value="0$gflops_value"
@@ -101,13 +102,35 @@ echo '[[jobs]]'
 echo "name = \"matmul-f32-${m}x${k}x${n}\""
 echo "size = $n"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops "$m" "$k" "$n")
+gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo "backend_name = \"morello\""
 echo "docker_path = \"./morello\""
 echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
 echo "command = [ \"/run_matmul_x86_example.sh\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
+done
+done
+done
+
+# Add batch parallel matmul benchmarks
+for batch_size in 2 4 8 16; do
+for m in 2048; do
+for k in 2048; do
+for n in 2048; do
+echo '[[jobs]]'
+echo "name = \"matmul-batch-parallel-f32-${batch_size}x${m}x${k}x${n}\""
+echo "size = $n"
+echo "batch_size = $batch_size"
+gflops_value=$(calculate_gflops "$batch_size" "$m" "$k" "$n")
+echo "gflops = $gflops_value"
+echo "backend_name = \"morello\""
+echo "docker_path = \"./morello\""
+echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+echo "command = [ \"/run_matmul_batch_parallel_x86_example.sh\", \"$batch_size\", \"$m\", \"$k\", \"$n\" ]"
+echo "num_cores = $batch_size"
+echo ""
+done
 done
 done
 done
@@ -145,7 +168,7 @@ echo '[[jobs]]'
 echo "name = \"matmul-f32-${m}x${k}x${n}\""
 echo "size = $m"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops "$m" "$k" "$n")
+gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo "backend_name = \"aocl-$aocl_version\""
 echo 'docker_path = "./aocl"'
@@ -167,7 +190,7 @@ echo '[[jobs]]'
 echo "name = \"matmul-f32-${m}x${k}x${n}\""
 echo "size = $m"
 echo 'batch_size = 1'
-gflops_value=$(calculate_gflops "$m" "$k" "$n")
+gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo 'backend_name = "intel-mkl"'
 echo 'docker_path = "./intel-mkl"'
