@@ -113,28 +113,6 @@ done
 done
 done
 
-# Add batch parallel matmul benchmarks
-for batch_size in 2 4 8 16; do
-for m in 2048; do
-for k in 2048; do
-for n in 2048; do
-echo '[[jobs]]'
-echo "name = \"matmul-batch-parallel-f32-${batch_size}x${m}x${k}x${n}\""
-echo "size = $n"
-echo "batch_size = $batch_size"
-gflops_value=$(calculate_gflops "$batch_size" "$m" "$k" "$n")
-echo "gflops = $gflops_value"
-echo "backend_name = \"morello\""
-echo "docker_path = \"./morello\""
-echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-echo "command = [ \"/run_matmul_batch_parallel_x86_example.sh\", \"$batch_size\", \"$m\", \"$k\", \"$n\" ]"
-echo "num_cores = $batch_size"
-echo ""
-done
-done
-done
-done
-
 # Temporarily disable Morello matmuls. Synthesis is too slow on HEAD.
 # TODO: Re-enable.
 #
@@ -149,6 +127,34 @@ done
 # echo "command = [ \"/run_bench.sh\", \"matmul\", \"$i\" ]"
 # echo ""
 # done
+
+# Add batch-parallel for 2048x2048x2048 only
+for batch_size in 2 4 8 16; do
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
+    echo "size = 2048"
+    echo "batch_size = $batch_size"
+    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "intel-mkl"'
+    echo 'docker_path = "./intel-mkl"'
+    echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    echo "num_cores = $batch_size"
+    echo ""
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
+    echo "size = 2048"
+    echo "batch_size = $batch_size"
+    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
+    echo "gflops = $gflops_value"
+    echo "backend_name = \"morello\""
+    echo "docker_path = \"./morello\""
+    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    echo "command = [ \"/run_matmul_batch_parallel_x86_example.sh\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    echo "num_cores = $batch_size"
+    echo ""
+done
 
 for mkn in "${mkn_combinations[@]}"; do
 IFS=',' read -r m k n <<< "$mkn"
