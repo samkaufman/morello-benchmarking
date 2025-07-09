@@ -11,6 +11,6 @@ RUN apt-get update \
 
 FROM base
 WORKDIR /app
-COPY mkl_bench_f32.cpp mkl_bench_batch_parallel_f32.cpp mkl_bench_u8s8s32.cpp build_and_run.sh ./
+COPY mkl_bench_f32.cpp mkl_bench_batch_parallel_f32.cpp mkl_bench_u8s8s32.cpp mkl_bench_batch_parallel_u8s8s32.cpp build_and_run.sh ./
 ENV LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/mkl MKL_NUM_THREADS=1
 ENTRYPOINT ["./build_and_run.sh"]

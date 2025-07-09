@@ -143,6 +143,16 @@ for batch_size in 2 4 8 16; do
     echo ""
 
     echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x2048x2048x2048\""
+    echo "size = 2048"
+    echo "batch_size = $batch_size"
+    echo 'backend_name = "intel-mkl"'
+    echo 'docker_path = "./intel-mkl"'
+    echo "command = [ \"batch-parallel-u8s8s32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    echo "num_cores = $batch_size"
+    echo ""
+
+    echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
     echo "size = 2048"
     echo "batch_size = $batch_size"
