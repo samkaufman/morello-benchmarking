@@ -241,6 +241,6 @@ echo ""
 done
 
 echo '[reporters.google_sheets]'
-echo 'key_file = "../../morellosecrets/morello-339002-7f91851fee55.json"'
+echo "key_file = \"${MORELLO_SECRETS_KEY_PATH}\""
 echo 'sheet_name = "Morello Performance Benchmarks"'
 echo 'folder_name = "BETA"'
