@@ -1,5 +1,5 @@
 diff --git a/morello/examples/matmul_x86.rs b/morello/examples/matmul_x86.rs
-index 70c8b4f6..3444ab07 100644
+index 8e374698..bdc34d2c 100644
 --- a/morello/examples/matmul_x86.rs
 +++ b/morello/examples/matmul_x86.rs
 @@ -14,11 +14,19 @@ use morello::utils::ToWriteFmt;
@@ -23,9 +23,7 @@ index 70c8b4f6..3444ab07 100644
          (f32, GL, row_major),
          (f32, GL, row_major),
          (f32, GL, row_major),
---- a/morello/examples/matmul_x86.rs
-+++ b/morello/examples/matmul_x86.rs
-@@ -111,19 +111,14 @@ fn main() {
+@@ -111,19 +119,14 @@ fn main() {
      }
  
      // Benchmark.
@@ -37,7 +35,7 @@ index 70c8b4f6..3444ab07 100644
      let result = implementation
 -        .bench(ITERS, None)
 +        .bench(iterations, None)
-         .unwrap_or_else(|e| panic!("Failed to benchmark: {}", e));
+         .unwrap_or_else(|e| panic!("Failed to benchmark: {e}"));
 -    let kernel_runtime =
 -        (result.best_inner_loop_runtime() / result.inner_loop_iterations).as_secs_f64();
 -    let throughput =

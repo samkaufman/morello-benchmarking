@@ -19,8 +19,6 @@ WORKDIR /morello
 RUN git checkout $MORELLO_VERSION && \
     git submodule update --init --recursive
 RUN sed -i 's/^fn apply_to_leaf_spec/pub fn apply_to_leaf_spec/' morello/src/scheduling_sugar.rs
-COPY ./openmp.patch ./
-RUN git apply openmp.patch
 RUN cargo build --release --no-default-features
 
 COPY ./matmul_x86_benchmarking.patch ./matmul_batch_parallel_x86_benchmarking.patch ./

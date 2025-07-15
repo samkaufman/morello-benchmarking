@@ -64,12 +64,11 @@ for size in "${weekly_square_sizes[@]}"; do
     mkn_combinations+=("$size,$size,$size")
 done
 
-
-# TODO: Use the latest commit hash of the weird-tiling2 branch
-# declare -r MORELLO_HASH=$(
-#     curl -s "https://api.github.com/repos/samkaufman/morello/branches/weird-tiling2" |
-#     jq -r '.commit.sha')
-declare -r MORELLO_HASH="3630e76e"
+# Use the latest commit hash of the main branch
+MORELLO_HASH=$(
+    curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
+    jq -r '.commit.sha')
+declare -r MORELLO_HASH
 
 echo "max_work_time = 10800"  # 3 hours in seconds
 echo "order = \"random\""

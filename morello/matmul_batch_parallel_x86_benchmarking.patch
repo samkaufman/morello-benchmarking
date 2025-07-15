@@ -1,8 +1,8 @@
 diff --git a/morello/examples/matmul_batch_parallel_x86.rs b/morello/examples/matmul_batch_parallel_x86.rs
-index 3918590d..b0f8486e 100644
+index a4a4e948..13865344 100644
 --- a/morello/examples/matmul_batch_parallel_x86.rs
 +++ b/morello/examples/matmul_batch_parallel_x86.rs
-@@ -12,12 +12,20 @@ use morello::target::{
+@@ -12,12 +12,19 @@ use morello::target::{
  };
  use morello::utils::ToWriteFmt;
  use nonzero::nonzero as nz;
@@ -10,9 +10,8 @@ index 3918590d..b0f8486e 100644
  use std::io;
  
  fn main() {
-+    let args: Vec<String> = env::args().collect();
-+
      // Compute a batch=4 matrix multiplication. (Four independent matmuls!)
++    let args: Vec<String> = env::args().collect();
      let mut spec: Spec<X86Target> = spec!(MatmulAccum(
 -        [4, 2048, 2048, 2048],
 +        [
@@ -24,7 +23,7 @@ index 3918590d..b0f8486e 100644
          (f32, GL, row_major),
          (f32, GL, row_major),
          (f32, GL, row_major)
-@@ -85,20 +93,16 @@ fn main() {
+@@ -85,20 +92,16 @@ fn main() {
      }
  
      // Benchmark.
@@ -36,7 +35,7 @@ index 3918590d..b0f8486e 100644
      let result = implementation
 -        .bench(ITERS, None)
 +        .bench(iterations, None)
-         .unwrap_or_else(|e| panic!("Failed to benchmark: {}", e));
+         .unwrap_or_else(|e| panic!("Failed to benchmark: {e}"));
 -    let kernel_runtime =
 -        (result.best_inner_loop_runtime() / result.inner_loop_iterations).as_secs_f64();
 -    let throughput =
