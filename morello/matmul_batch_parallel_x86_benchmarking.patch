@@ -1,17 +1,33 @@
 diff --git a/morello/examples/matmul_batch_parallel_x86.rs b/morello/examples/matmul_batch_parallel_x86.rs
-index a4a4e948..13865344 100644
+index 3f6732c8..0ab2816e 100644
 --- a/morello/examples/matmul_batch_parallel_x86.rs
 +++ b/morello/examples/matmul_batch_parallel_x86.rs
-@@ -12,12 +12,19 @@ use morello::target::{
+@@ -1,7 +1,6 @@
+ use morello::codegen::CodeGen;
+ use morello::imp::ImplNode;
+ use morello::layout::{row_major, Layout, PhysDim};
+-use morello::pprint::ImplPrintStyle;
+ use morello::scheduling_sugar::{SchedulingSugar, Subschedule};
+ use morello::spec;
+ use morello::spec::Spec;
+@@ -10,9 +9,8 @@ use morello::target::{
+     CpuMemoryLevel::{GL, L1, RF, VRF},
+     X86Target,
  };
- use morello::utils::ToWriteFmt;
+-use morello::utils::ToWriteFmt;
  use nonzero::nonzero as nz;
+-use std::io;
 +use std::env;
- use std::io;
+ 
+ const M_C: u32 = 1020;
+ const K_C: u32 = 1024;
+@@ -22,9 +20,16 @@ const N_R: u32 = 16;
+ const MOVE_TILE_SIZE: u32 = 32;
  
  fn main() {
++    let args = env::args().collect::<Vec<String>>();
++
      // Compute a batch=4 matrix multiplication. (Four independent matmuls!)
-+    let args: Vec<String> = env::args().collect();
      let mut spec: Spec<X86Target> = spec!(MatmulAccum(
 -        [4, 2048, 2048, 2048],
 +        [
@@ -23,19 +39,30 @@ index a4a4e948..13865344 100644
          (f32, GL, row_major),
          (f32, GL, row_major),
          (f32, GL, row_major)
-@@ -85,20 +92,16 @@ fn main() {
+@@ -118,14 +123,6 @@ fn main() {
+                 .subschedule(&[1, 2], naive_vector_move_impl)
+         });
+ 
+-    implementation
+-        .emit(
+-            true,
+-            Some(ImplPrintStyle::Compact),
+-            &mut ToWriteFmt(io::stdout()),
+-        )
+-        .unwrap_or_else(|e| panic!("Failed to generate code: {e}"));
+-
+     // If the verification flag is set, let's additionally double-check that the lowered
+     // code builds and produces the correct results.
+     #[cfg(feature = "verification")]
+@@ -142,21 +139,10 @@ fn main() {
+         }
      }
  
-     // Benchmark.
+-    // Benchmark.
 -    const ITERS: u32 = 10;
-+    let iterations = std::env::var("CHERRYBENCH_LOOP_STEPS")
-+        .unwrap()
-+        .parse::<u32>()
-+        .unwrap();
-     let result = implementation
+-    let result = implementation
 -        .bench(ITERS, None)
-+        .bench(iterations, None)
-         .unwrap_or_else(|e| panic!("Failed to benchmark: {e}"));
+-        .unwrap_or_else(|e| panic!("Failed to benchmark: {e}"));
 -    let kernel_runtime =
 -        (result.best_inner_loop_runtime() / result.inner_loop_iterations).as_secs_f64();
 -    let throughput =
@@ -46,9 +73,10 @@ index a4a4e948..13865344 100644
 -        (spec.flops().unwrap() as f64 * throughput) / 1_000_000_000.0,
 -        spec.flops().unwrap(),
 -    );
-+    for duration in &result.inner_loop_runtimes {
-+        println!("run: {:.4}s", duration.as_secs_f64());
-+    }
++    let built_artifact = implementation
++        .build(true)
++        .unwrap_or_else(|e| panic!("Failed to build generated code: {e}"));
++    println!("{}", built_artifact.binary_path().display());
  }
  
  fn naive_scalar_move_impl(move_spec: &Spec<X86Target>) -> ImplNode<X86Target> {

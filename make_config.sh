@@ -127,7 +127,7 @@ done
 # done
 
 # Add batch-parallel for 2048x2048x2048 only
-for batch_size in 2 4 8 16; do
+for batch_size in $(seq 2 16); do
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
     echo "size = 2048"
@@ -160,6 +160,19 @@ for batch_size in 2 4 8 16; do
     echo "docker_path = \"./morello\""
     echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
     echo "command = [ \"/run_matmul_batch_parallel_x86_example.sh\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    echo "num_cores = $batch_size"
+    echo "enable_perf = true"
+    echo ""
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
+    echo "size = 2048"
+    echo "batch_size = $batch_size"
+    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "openblas"'
+    echo 'docker_path = "./openblas"'
+    echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     echo "num_cores = $batch_size"
     echo ""
 done
@@ -208,6 +221,17 @@ gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo 'backend_name = "intel-mkl"'
 echo 'docker_path = "./intel-mkl"'
+echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
+echo ""
+
+echo '[[jobs]]'
+echo "name = \"matmul-f32-${m}x${k}x${n}\""
+echo "size = $m"
+echo 'batch_size = 1'
+gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
+echo "gflops = $gflops_value"
+echo 'backend_name = "openblas"'
+echo 'docker_path = "./openblas"'
 echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 

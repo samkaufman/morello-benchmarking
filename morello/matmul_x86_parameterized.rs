@@ -95,16 +95,10 @@ fn main() {
     }
 
     // Benchmark.
-    let iterations = std::env::var("CHERRYBENCH_LOOP_STEPS")
-        .unwrap()
-        .parse::<u32>()
-        .unwrap();
-    let result = implementation
-        .bench(iterations, None)
-        .unwrap_or_else(|e| panic!("Failed to benchmark: {}", e));
-    for duration in &result.inner_loop_runtimes {
-        println!("run: {:.4}s", duration.as_secs_f64());
-    }
+    let build_result = implementation
+        .build(true)
+        .unwrap_or_else(|e| panic!("Failed to build generated code for benchmarking: {}", e));
+    println!("{}", build_result.binary_path().display());
 }
 
 /// Traverses an ImplNode tree and replaces any SpecApp containing a Move with VectorAssign and
