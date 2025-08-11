@@ -40,6 +40,8 @@ int main(int argc, char* argv[]) {
     }
     const int inner_steps = std::stoi(inner_steps_env);
 
+    openblas_set_num_threads(1);
+
     std::random_device rd;
     std::mt19937 generator(rd());
     std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
