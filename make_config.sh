@@ -126,8 +126,50 @@ done
 # echo ""
 # done
 
-# Add batch-parallel for 2048x2048x2048 only
-for batch_size in $(seq 2 16); do
+# Add batch-parallel at 16 cores for all sizes
+for n in "${powers_of_two[@]}"; do
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
+    echo "size = $n"
+    echo "batch_size = 16"
+    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "intel-mkl"'
+    echo 'docker_path = "./intel-mkl"'
+    echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
+    echo "num_cores = 16"
+    echo ""
+
+    for aocl_version in "4.1" "4.2"; do
+        echo '[[jobs]]'
+        echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
+        echo "size = $n"
+        echo "batch_size = 16"
+        gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
+        echo "gflops = $gflops_value"
+        echo "backend_name = \"aocl-$aocl_version\""
+        echo 'docker_path = "./aocl"'
+        echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
+        echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
+        echo "num_cores = 16"
+        echo ""
+    done
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
+    echo "size = $n"
+    echo "batch_size = 16"
+    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "openblas"'
+    echo 'docker_path = "./openblas"'
+    echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
+    echo "num_cores = 16"
+    echo ""
+done
+
+# Add batch-parallel for 2048x2048x2048
+for batch_size in $(seq 2 15); do
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
     echo "size = 2048"
@@ -139,6 +181,21 @@ for batch_size in $(seq 2 16); do
     echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     echo "num_cores = $batch_size"
     echo ""
+
+    for aocl_version in "4.1" "4.2"; do
+        echo '[[jobs]]'
+        echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
+        echo "size = 2048"
+        echo "batch_size = $batch_size"
+        gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
+        echo "gflops = $gflops_value"
+        echo "backend_name = \"aocl-$aocl_version\""
+        echo 'docker_path = "./aocl"'
+        echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
+        echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "num_cores = $batch_size"
+        echo ""
+    done
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x2048x2048x2048\""
@@ -200,7 +257,7 @@ echo "gflops = $gflops_value"
 echo "backend_name = \"aocl-$aocl_version\""
 echo 'docker_path = "./aocl"'
 echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
-echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
+echo "command = [ \"f32\", \"1\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 done
 
