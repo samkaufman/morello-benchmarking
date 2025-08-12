@@ -48,26 +48,25 @@ if ! [[ "$M" =~ ^[0-9]+$ ]] || ! [[ "$K" =~ ^[0-9]+$ ]] || ! [[ "$N" =~ ^[0-9]+$
     exit 1
 fi
 
+BUILD="clang++-18 \
+    -std=c++17 \
+    -O3 \
+    -march=core-avx2 \
+    -DNDEBUG \
+    -fopenmp \
+    -I${MKLROOT:-/opt/intel/oneapi/mkl/latest}/include \
+    -L${MKLROOT:-/opt/intel/oneapi/mkl/latest}/lib/intel64 \
+    -L/usr/lib/llvm-18/lib \
+    -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lomp -lpthread -lm -ldl"
+
 if [ "$BENCH_TYPE" = "f32" ]; then
-    clang++-18 -std=c++17 -O3 -march=core-avx2 -DNDEBUG \
-        -I/usr/include/mkl \
-        -L/usr/lib/x86_64-linux-gnu/mkl -lmkl_intel_lp64 -lmkl_core -lmkl_sequential -lm -ldl \
-        -o mkl_bench mkl_bench_f32.cpp
+    $BUILD -o mkl_bench mkl_bench_f32.cpp
 elif [ "$BENCH_TYPE" = "batch-parallel-f32" ]; then
-    clang++-18 -std=c++17 -O3 -march=core-avx2 -DNDEBUG -fopenmp \
-        -I/usr/include/mkl \
-        -L/usr/lib/x86_64-linux-gnu/mkl -lmkl_intel_lp64 -lmkl_core -lmkl_sequential -lm -ldl \
-        -o mkl_bench mkl_bench_batch_parallel_f32.cpp
+    $BUILD -o mkl_bench mkl_bench_batch_parallel_f32.cpp
 elif [ "$BENCH_TYPE" = "u8s8s32" ]; then
-    clang++-18 -std=c++17 -O3 -march=core-avx2 -DNDEBUG \
-        -I/usr/include/mkl \
-        -L/usr/lib/x86_64-linux-gnu/mkl -lmkl_intel_lp64 -lmkl_core -lmkl_sequential -lm -ldl \
-        -o mkl_bench mkl_bench_u8s8s32.cpp
+    $BUILD -o mkl_bench mkl_bench_u8s8s32.cpp
 elif [ "$BENCH_TYPE" = "batch-parallel-u8s8s32" ]; then
-    clang++-18 -std=c++17 -O3 -march=core-avx2 -DNDEBUG -fopenmp \
-        -I/usr/include/mkl \
-        -L/usr/lib/x86_64-linux-gnu/mkl -lmkl_intel_lp64 -lmkl_core -lmkl_sequential -lm -ldl \
-        -o mkl_bench mkl_bench_batch_parallel_u8s8s32.cpp
+    $BUILD -o mkl_bench mkl_bench_batch_parallel_u8s8s32.cpp
 else
     echo "Unknown benchmark type: $BENCH_TYPE"
     usage
