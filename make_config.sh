@@ -3,6 +3,7 @@ set -e
 
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
+declare -a power_of_two_sizes=(64 128 256 512 1024)
 
 # Function to calculate GFLOPS for f32 matrix multiplication
 # Formula: 2 * M * K * N / 1,000,000,000
@@ -19,15 +20,12 @@ calculate_gflops() {
     echo "$gflops_value"
 }
 
-# mkn_combinations: all combinations of power-of-two sizes
-declare -a power_of_two_sizes=(64 128 256 512 1024)
-declare -a mkn_combinations=()
-
-# First, add all power-of-two combinations
+# mkn_u8s8s16_combinations: all combinations of power-of-two sizes
+declare -a mkn_u8s8s16_combinations=()
 for m in "${power_of_two_sizes[@]}"; do
 for k in "${power_of_two_sizes[@]}"; do
 for n in "${power_of_two_sizes[@]}"; do
-    mkn_combinations+=("$m,$k,$n")
+    mkn_u8s8s16_combinations+=("$m,$k,$n")
 done
 done
 done
@@ -60,7 +58,7 @@ case $day_of_week in
 esac
 mapfile -t weekly_square_sizes < <(printf "%s\n" "${day_specific_sizes[@]}" "${powers_of_two[@]}" | sort -un)
 for size in "${weekly_square_sizes[@]}"; do
-    mkn_combinations+=("$size,$size,$size")
+    mkn_u8s8s16_combinations+=("$size,$size,$size")
 done
 
 # Use the latest commit hash of the main branch
@@ -72,6 +70,30 @@ declare -r MORELLO_HASH
 echo "max_work_time = 10800"  # 3 hours in seconds
 echo "order = \"random\""
 echo ""
+
+# Args: batch m k n
+emit_f32_backend_trio() {
+    local b="$1" m="$2" k="$3" n="$4"
+    local gflops_value job_name
+    gflops_value=$(calculate_gflops "$b" "$m" "$k" "$n")
+    job_name="matmul-batch-parallel-f32-${b}x${m}x${k}x${n}"
+    for backend in intel-mkl aocl-4.2 openblas; do
+        echo '[[jobs]]'
+        echo "name = \"${job_name}\""
+        echo "size = $n"
+        echo "batch_size = $b"
+        echo "gflops = $gflops_value"
+        echo "backend_name = \"$backend\""
+        case $backend in
+            intel-mkl) echo 'docker_path = "./intel-mkl"' ;;
+            aocl-4.2) echo 'docker_path = "./aocl"' ;;
+            openblas) echo 'docker_path = "./openblas"' ;;
+        esac
+        echo "command = [ \"batch-parallel-f32\", \"$b\", \"$m\", \"$k\", \"$n\" ]"
+        echo "num_cores = $b"
+        echo ""
+    done
+}
 
 echo '[[jobs]]'
 echo 'name = "gemma-decode-2b"'
@@ -94,7 +116,7 @@ echo ""
 done
 
 for batch_size in $(seq 1 16); do
-for m in "${day_specific_sizes[@]}"; do
+for m in "${powers_of_two[@]}"; do
 for k in "${powers_of_two[@]}"; do
 for n in "${powers_of_two[@]}"; do
 echo '[[jobs]]'
@@ -128,70 +150,13 @@ done
 # echo ""
 # done
 
-# Add batch-parallel at 16 cores for all sizes
 for n in "${powers_of_two[@]}"; do
-    echo '[[jobs]]'
-    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
-    echo "size = $n"
-    echo "batch_size = 16"
-    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "intel-mkl"'
-    echo 'docker_path = "./intel-mkl"'
-    echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
-    echo "num_cores = 16"
-    echo ""
-
-    echo '[[jobs]]'
-    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
-    echo "size = $n"
-    echo "batch_size = 16"
-    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "aocl-4.2"'
-    echo 'docker_path = "./aocl"'
-    echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
-    echo "num_cores = 16"
-    echo ""
-
-    echo '[[jobs]]'
-    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
-    echo "size = $n"
-    echo "batch_size = 16"
-    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "openblas"'
-    echo 'docker_path = "./openblas"'
-    echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
-    echo "num_cores = 16"
-    echo ""
+    emit_f32_backend_trio 16 "$n" "$n" "$n"
 done
 
-# Add batch-parallel for 2048x2048x2048
+# Add batch-parallel for 2048x2048x2048 (factorized f32 trio + u8s8s32)
 for batch_size in $(seq 2 15); do
-    echo '[[jobs]]'
-    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
-    echo "size = 2048"
-    echo "batch_size = $batch_size"
-    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "intel-mkl"'
-    echo 'docker_path = "./intel-mkl"'
-    echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
-    echo "num_cores = $batch_size"
-    echo ""
-
-    echo '[[jobs]]'
-    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
-    echo "size = 2048"
-    echo "batch_size = $batch_size"
-    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "aocl-4.2"'
-    echo 'docker_path = "./aocl"'
-    echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
-    echo "num_cores = $batch_size"
-    echo ""
+    emit_f32_backend_trio "$batch_size" 2048 2048 2048
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x2048x2048x2048\""
@@ -202,21 +167,11 @@ for batch_size in $(seq 2 15); do
     echo "command = [ \"batch-parallel-u8s8s32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     echo "num_cores = $batch_size"
     echo ""
-
-    echo '[[jobs]]'
-    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
-    echo "size = 2048"
-    echo "batch_size = $batch_size"
-    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "openblas"'
-    echo 'docker_path = "./openblas"'
-    echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
-    echo "num_cores = $batch_size"
-    echo ""
 done
 
-for mkn in "${mkn_combinations[@]}"; do
+emit_f32_backend_trio 1 "$m" "$k" "$n"
+
+for mkn in "${mkn_u8s8s16_combinations[@]}"; do
 IFS=',' read -r m k n <<< "$mkn"
     
 echo '[[jobs]]'
@@ -229,17 +184,6 @@ echo "command = [ \"u8s8s16\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 
 echo '[[jobs]]'
-echo "name = \"matmul-batch-parallel-f32-1x${m}x${k}x${n}\""
-echo "size = $m"
-echo 'batch_size = 1'
-gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
-echo "gflops = $gflops_value"
-echo 'backend_name = "aocl-4.2"'
-echo 'docker_path = "./aocl"'
-echo "command = [ \"f32\", \"1\", \"$m\", \"$k\", \"$n\" ]"
-echo ""
-
-echo '[[jobs]]'
 echo "name = \"matmul-u8s8s32-${m}x${k}x${n}\""
 echo "size = $m"
 echo 'batch_size = 1'
@@ -248,27 +192,6 @@ echo 'docker_path = "./intel-mkl"'
 echo "command = [ \"u8s8s32\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 
-echo '[[jobs]]'
-echo "name = \"matmul-batch-parallel-f32-1x${m}x${k}x${n}\""
-echo "size = $m"
-echo 'batch_size = 1'
-gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
-echo "gflops = $gflops_value"
-echo 'backend_name = "intel-mkl"'
-echo 'docker_path = "./intel-mkl"'
-echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
-echo ""
-
-echo '[[jobs]]'
-echo "name = \"matmul-batch-parallel-f32-1x${m}x${k}x${n}\""
-echo "size = $m"
-echo 'batch_size = 1'
-gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
-echo "gflops = $gflops_value"
-echo 'backend_name = "openblas"'
-echo 'docker_path = "./openblas"'
-echo "command = [ \"f32\", \"$m\", \"$k\", \"$n\" ]"
-echo ""
 
 for b in "tvm" "eigen"; do
     # only square matrix jobs for tvm/eigen
