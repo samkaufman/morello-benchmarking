@@ -20,55 +20,20 @@ use std::io;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let n = args[3].parse::<u32>().unwrap();
+    let batch_size = args[1].parse::<u32>().unwrap();
+    let m = args[2].parse::<u32>().unwrap();
+    let k = args[3].parse::<u32>().unwrap();
+    let n = args[4].parse::<u32>().unwrap();
     let mut spec: Spec<X86Target> = spec!(MatmulAccum(
-        [
-            1,
-            args[1].parse::<u32>().unwrap(),
-            args[2].parse::<u32>().unwrap(),
-            n
-        ],
+        [batch_size, m, k, n],
         (f32, GL, row_major),
         (f32, GL, row_major),
-        (f32, GL, row_major),
-        serial
+        (f32, GL, row_major)
     ));
     spec.canonicalize().unwrap();
 
-    let mat1_pack_size = nz!(16u32);
-    let layout_b = Layout::new(vec![
-        (0, PhysDim::Dynamic),
-        (2, PhysDim::Dynamic),
-        (1, PhysDim::Dynamic),
-        (2, PhysDim::Packed(mat1_pack_size)),
-    ]);
-
-    let implementation = spec.split_saturating_ensure_continue(128, |s| {
-        s.move_relayout(1, GL, layout_b.clone(), None)
-            .subschedule(&[0], |pack_b| {
-                // TODO: This stinks. Use vectors at least.
-                pack_b
-                    .tile_out(&[1, 1, 1])
-                    .move_param(0, L1)
-                    .move_param(1, L1)
-                    .move_param(0, RF)
-                    .subschedule(&[0], |m0| m0.select(CpuKernel::ValueAssign))
-                    .subschedule(&[1], |m0| m0.select(CpuKernel::ValueAssign))
-            })
-            .tile_out_ensure_continue(&[1, 128, 1024.min(n)], |a| {
-                a.tile_out_ensure_continue(&[1, 6, 16], |b| {
-                    b.move_param_saturating(0, L1)
-                        .move_param_saturating(1, L1)
-                        .move_param_saturating(2, L1)
-                        .move_vrf_saturating(2, VRF, nz!(8u32))
-                        .split_saturating(1)
-                        .tile_out_saturating(&[1, 1, 16])
-                        .move_vrf_saturating(1, VRF, nz!(8u32))
-                        .move_vrf_saturating(2, VRF, nz!(8u32))
-                        .select(CpuKernel::BroadcastVecMultAdd)
-                })
-            })
-    });
+    let implementation =
+        spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| schedule_single_matmul(s, n));
     let implementation = apply_rewrites(&implementation);
     implementation
         .emit(
@@ -99,6 +64,43 @@ fn main() {
         .build(true)
         .unwrap_or_else(|e| panic!("Failed to build generated code for benchmarking: {}", e));
     println!("{}", build_result.binary_path().display());
+}
+
+fn schedule_single_matmul(spec: &ImplNode<X86Target>, n: u32) -> ImplNode<X86Target> {
+    let mat1_pack_size = nz!(16u32);
+    let layout_b = Layout::new(vec![
+        (0, PhysDim::Dynamic),
+        (2, PhysDim::Dynamic),
+        (1, PhysDim::Dynamic),
+        (2, PhysDim::Packed(mat1_pack_size)),
+    ]);
+
+    spec.split_saturating_ensure_continue(128, |s| {
+        s.move_relayout(1, GL, layout_b.clone(), None)
+            .subschedule(&[0], |pack_b| {
+                // TODO: This stinks. Use vectors at least.
+                pack_b
+                    .tile_out(&[1, 1, 1])
+                    .move_param(0, L1)
+                    .move_param(1, L1)
+                    .move_param(0, RF)
+                    .subschedule(&[0], |m0| m0.select(CpuKernel::ValueAssign))
+                    .subschedule(&[1], |m0| m0.select(CpuKernel::ValueAssign))
+            })
+            .tile_out_ensure_continue(&[1, 128, 1024.min(n)], |a| {
+                a.tile_out_ensure_continue(&[1, 6, 16], |b| {
+                    b.move_param_saturating(0, L1)
+                        .move_param_saturating(1, L1)
+                        .move_param_saturating(2, L1)
+                        .move_vrf_saturating(2, VRF, nz!(8u32))
+                        .split_saturating(1)
+                        .tile_out_saturating(&[1, 1, 16])
+                        .move_vrf_saturating(1, VRF, nz!(8u32))
+                        .move_vrf_saturating(2, VRF, nz!(8u32))
+                        .select(CpuKernel::BroadcastVecMultAdd)
+                })
+            })
+    })
 }
 
 /// Traverses an ImplNode tree and replaces any SpecApp containing a Move with VectorAssign and
@@ -189,6 +191,14 @@ trait TileOutContinue<Tgt: Target>: SchedulingSugar<Tgt> {
     where
         F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>;
 
+    fn tile_out_parallel_ensure_continue<F>(
+        &self,
+        output_shape: &[u32],
+        continuation: F,
+    ) -> ImplNode<Tgt>
+    where
+        F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>;
+
     /// Apply `split_saturating_hardcore` with the given k, then apply the continuation function to all SpecApp bodies
     /// in the resulting Loop.
     fn split_saturating_ensure_continue<F>(&self, k: u32, continuation: F) -> ImplNode<Tgt>
@@ -209,6 +219,17 @@ where
         F: Fn(&ImplNode<X86Target>) -> ImplNode<X86Target>,
     {
         apply_fn_to_leaves(&self.tile_out_ensure(output_shape), &continuation)
+    }
+
+    fn tile_out_parallel_ensure_continue<F>(
+        &self,
+        output_shape: &[u32],
+        continuation: F,
+    ) -> ImplNode<X86Target>
+    where
+        F: Fn(&ImplNode<X86Target>) -> ImplNode<X86Target>,
+    {
+        apply_fn_to_leaves(&self.tile_out_parallel_ensure(output_shape), &continuation)
     }
 
     fn split_saturating_ensure_continue<F>(&self, k: u32, continuation: F) -> ImplNode<X86Target>
@@ -238,7 +259,9 @@ where
 
 trait SchedulingSugarExt<Tgt: morello::target::Target> {
     fn tile_out_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
+    fn tile_out_parallel_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
     fn tile_out_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
+    fn tile_out_parallel_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
     fn split_saturating(&self, k: u32) -> morello::imp::ImplNode<Tgt>;
     fn split_saturating_ensure(&self, k: u32) -> morello::imp::ImplNode<Tgt>;
     fn move_param_saturating(&self, source_idx: u8, destination_level: Tgt::Level)
@@ -344,6 +367,43 @@ where
         self.tile_out(&saturated_shape)
     }
 
+    fn tile_out_parallel_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
+        if self.child_count() != 0 {
+            return morello::scheduling_sugar::apply_to_leaf_spec(
+                &self.clone().into_implnode(),
+                |spec| spec.tile_out_parallel_saturating(output_shape),
+            );
+        }
+
+        // Get the current output shape from the spec
+        let Some(spec) = self.get_spec() else {
+            panic!("Spec not found for node: {self:?}");
+        };
+        let Some(output_idx) = spec.0.unique_output_index() else {
+            return self.tile_out_parallel(output_shape);
+        };
+        let current_shape = spec.0.parameter_shape(output_idx);
+
+        // If the tiling shape is the same as current output, do nothing
+        if current_shape.len() == output_shape.len()
+            && current_shape
+                .iter()
+                .zip(output_shape.iter())
+                .all(|(c, o)| c.get() <= *o)
+        {
+            return self.clone().into_specapp().into();
+        }
+
+        // Saturate dimensions that are larger than the target
+        let saturated_shape: Vec<u32> = current_shape
+            .iter()
+            .zip(output_shape)
+            .map(|(c, &o)| c.get().min(o))
+            .collect();
+
+        self.tile_out_parallel(&saturated_shape)
+    }
+
     fn tile_out_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
         if self.child_count() != 0 {
             return morello::scheduling_sugar::apply_to_leaf_spec(
@@ -353,6 +413,20 @@ where
         }
 
         let initial_result = self.tile_out_saturating(output_shape);
+
+        // Recursively process the entire tree to ensure all leaves have appropriate output shapes
+        hardcore_process_all_leaves(&initial_result, output_shape)
+    }
+
+    fn tile_out_parallel_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
+        if self.child_count() != 0 {
+            return morello::scheduling_sugar::apply_to_leaf_spec(
+                &self.clone().into_implnode(),
+                |spec| spec.tile_out_parallel_ensure(output_shape),
+            );
+        }
+
+        let initial_result = self.tile_out_parallel_saturating(output_shape);
 
         // Recursively process the entire tree to ensure all leaves have appropriate output shapes
         hardcore_process_all_leaves(&initial_result, output_shape)

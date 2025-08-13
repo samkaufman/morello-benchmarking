@@ -93,20 +93,22 @@ echo "command = []"
 echo ""
 done
 
+for batch_size in $(seq 1 16); do
 for m in "${day_specific_sizes[@]}"; do
-for k in $(seq 128 64 2048); do
-for n in $(seq 128 128 2048); do
+for k in "${powers_of_two[@]}"; do
+for n in "${powers_of_two[@]}"; do
 echo '[[jobs]]'
-echo "name = \"matmul-f32-${m}x${k}x${n}\""
+echo "name = \"matmul-batch-parallel-alt-f32-${batch_size}x${m}x${k}x${n}\""
 echo "size = $n"
-echo 'batch_size = 1'
-gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
+echo "batch_size = \"$batch_size\""
+gflops_value=$(calculate_gflops "$batch_size" "$m" "$k" "$n")
 echo "gflops = $gflops_value"
 echo "backend_name = \"morello\""
 echo "docker_path = \"./morello\""
 echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$m\", \"$k\", \"$n\" ]"
+echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
+done
 done
 done
 done
