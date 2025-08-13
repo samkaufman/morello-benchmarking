@@ -34,7 +34,7 @@ done
 
 # Then add non-power-of-two square sizes
 day_of_week=$(date +%w)
-declare -a powers_of_two=(128 256 512 1024 2048)
+declare -a powers_of_two=(128 256 512 1024 2048 4096)
 case $day_of_week in
     0) # Sunday
         mapfile -t day_specific_sizes < <(seq 128 13 401)
