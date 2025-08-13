@@ -168,6 +168,20 @@ for n in "${powers_of_two[@]}"; do
     echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
     echo "num_cores = 16"
     echo ""
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
+    echo "size = $n"
+    echo "batch_size = 16"
+    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
+    echo "gflops = $gflops_value"
+    echo "backend_name = \"morello\""
+    echo "docker_path = \"./morello\""
+    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    echo "command = [ \"/run_matmul_batch_parallel_x86_example.sh\", \"16\", \"$n\", \"$n\", \"$n\" ]"
+    echo "num_cores = 16"
+    echo "enable_perf = true"
+    echo ""
 done
 
 # Add batch-parallel for 2048x2048x2048

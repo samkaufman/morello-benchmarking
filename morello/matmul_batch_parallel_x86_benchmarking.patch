@@ -1,31 +1,12 @@
 diff --git a/morello/examples/matmul_batch_parallel_x86.rs b/morello/examples/matmul_batch_parallel_x86.rs
-index 3f6732c8..0ab2816e 100644
+index 55bd4bfd..349e9a46 100644
 --- a/morello/examples/matmul_batch_parallel_x86.rs
 +++ b/morello/examples/matmul_batch_parallel_x86.rs
-@@ -1,7 +1,6 @@
- use morello::codegen::CodeGen;
- use morello::imp::ImplNode;
- use morello::layout::{row_major, Layout, PhysDim};
--use morello::pprint::ImplPrintStyle;
- use morello::scheduling_sugar::{SchedulingSugar, Subschedule};
- use morello::spec;
- use morello::spec::Spec;
-@@ -10,9 +9,8 @@ use morello::target::{
-     CpuMemoryLevel::{GL, L1, RF, VRF},
-     X86Target,
- };
--use morello::utils::ToWriteFmt;
- use nonzero::nonzero as nz;
--use std::io;
-+use std::env;
- 
- const M_C: u32 = 1020;
- const K_C: u32 = 1024;
-@@ -22,9 +20,16 @@ const N_R: u32 = 16;
+@@ -22,9 +22,16 @@ const N_R: u32 = 16;
  const MOVE_TILE_SIZE: u32 = 32;
  
  fn main() {
-+    let args = env::args().collect::<Vec<String>>();
++    let args = std::env::args().collect::<Vec<String>>();
 +
      // Compute a batch=4 matrix multiplication. (Four independent matmuls!)
      let mut spec: Spec<X86Target> = spec!(MatmulAccum(
@@ -39,7 +20,7 @@ index 3f6732c8..0ab2816e 100644
          (f32, GL, row_major),
          (f32, GL, row_major),
          (f32, GL, row_major)
-@@ -118,14 +123,6 @@ fn main() {
+@@ -117,14 +124,6 @@ fn main() {
                  .subschedule(&[1, 2], naive_vector_move_impl)
          });
  
@@ -54,7 +35,7 @@ index 3f6732c8..0ab2816e 100644
      // If the verification flag is set, let's additionally double-check that the lowered
      // code builds and produces the correct results.
      #[cfg(feature = "verification")]
-@@ -142,21 +139,10 @@ fn main() {
+@@ -141,21 +140,10 @@ fn main() {
          }
      }
  
