@@ -142,20 +142,17 @@ for n in "${powers_of_two[@]}"; do
     echo "num_cores = 16"
     echo ""
 
-    for aocl_version in "4.1" "4.2"; do
-        echo '[[jobs]]'
-        echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
-        echo "size = $n"
-        echo "batch_size = 16"
-        gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
-        echo "gflops = $gflops_value"
-        echo "backend_name = \"aocl-$aocl_version\""
-        echo 'docker_path = "./aocl"'
-        echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
-        echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
-        echo "num_cores = 16"
-        echo ""
-    done
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
+    echo "size = $n"
+    echo "batch_size = 16"
+    gflops_value=$(calculate_gflops 16 "$n" "$n" "$n")
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "aocl-4.2"'
+    echo 'docker_path = "./aocl"'
+    echo "command = [ \"batch-parallel-f32\", \"16\", \"$n\", \"$n\", \"$n\" ]"
+    echo "num_cores = 16"
+    echo ""
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-16x${n}x${n}x${n}\""
@@ -184,20 +181,17 @@ for batch_size in $(seq 2 15); do
     echo "num_cores = $batch_size"
     echo ""
 
-    for aocl_version in "4.1" "4.2"; do
-        echo '[[jobs]]'
-        echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
-        echo "size = 2048"
-        echo "batch_size = $batch_size"
-        gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
-        echo "gflops = $gflops_value"
-        echo "backend_name = \"aocl-$aocl_version\""
-        echo 'docker_path = "./aocl"'
-        echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
-        echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
-        echo "num_cores = $batch_size"
-        echo ""
-    done
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
+    echo "size = 2048"
+    echo "batch_size = $batch_size"
+    gflops_value=$(calculate_gflops "$batch_size" 2048 2048 2048)
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "aocl-4.2"'
+    echo 'docker_path = "./aocl"'
+    echo "command = [ \"batch-parallel-f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    echo "num_cores = $batch_size"
+    echo ""
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x2048x2048x2048\""
@@ -208,7 +202,6 @@ for batch_size in $(seq 2 15); do
     echo "command = [ \"batch-parallel-u8s8s32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     echo "num_cores = $batch_size"
     echo ""
-
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
@@ -226,14 +219,12 @@ done
 for mkn in "${mkn_combinations[@]}"; do
 IFS=',' read -r m k n <<< "$mkn"
     
-for aocl_version in "4.1" "4.2"; do
 echo '[[jobs]]'
 echo "name = \"matmul-u8s8s16-${m}x${k}x${n}\""
 echo "size = $m"
 echo 'batch_size = 1'
-echo "backend_name = \"aocl-$aocl_version\""
+echo 'backend_name = "aocl-4.2"'
 echo 'docker_path = "./aocl"'
-echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
 echo "command = [ \"u8s8s16\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
 
@@ -243,12 +234,10 @@ echo "size = $m"
 echo 'batch_size = 1'
 gflops_value=$(calculate_gflops 1 "$m" "$k" "$n")
 echo "gflops = $gflops_value"
-echo "backend_name = \"aocl-$aocl_version\""
+echo 'backend_name = "aocl-4.2"'
 echo 'docker_path = "./aocl"'
-echo "docker_build_args = { AOCL_VERSION = \"$aocl_version\" }"
 echo "command = [ \"f32\", \"1\", \"$m\", \"$k\", \"$n\" ]"
 echo ""
-done
 
 echo '[[jobs]]'
 echo "name = \"matmul-u8s8s32-${m}x${k}x${n}\""
