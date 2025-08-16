@@ -68,7 +68,7 @@ MORELLO_HASH=$(
 declare -r MORELLO_HASH
 
 echo "max_work_time = 10800"  # 3 hours in seconds
-echo "order = \"random\""
+echo "order = \"random-new-first\""
 echo ""
 
 # Args: batch m k n
