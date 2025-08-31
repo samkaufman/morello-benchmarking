@@ -115,26 +115,6 @@ echo "command = []"
 echo ""
 done
 
-for batch_size in $(seq 1 16); do
-for m in "${powers_of_two[@]}"; do
-for k in "${powers_of_two[@]}"; do
-for n in "${powers_of_two[@]}"; do
-echo '[[jobs]]'
-echo "name = \"matmul-batch-parallel-f32-${batch_size}x${m}x${k}x${n}\""
-echo "size = $n"
-echo "batch_size = \"$batch_size\""
-gflops_value=$(calculate_gflops "$batch_size" "$m" "$k" "$n")
-echo "gflops = $gflops_value"
-echo "backend_name = \"morello\""
-echo "docker_path = \"./morello\""
-echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"$m\", \"$k\", \"$n\" ]"
-echo ""
-done
-done
-done
-done
-
 # Temporarily disable Morello matmuls. Synthesis is too slow on HEAD.
 # TODO: Re-enable.
 #
@@ -150,13 +130,53 @@ done
 # echo ""
 # done
 
-for n in "${powers_of_two[@]}"; do
-    emit_f32_backend_trio 16 "$n" "$n" "$n"
+# Add batch-parallel for most square shapes
+for batch_size in 1 8 16; do
+# iterate over multiples of 100 (100..4000) plus all powers of two 128..4096
+mapfile -t seq_sizes < <(seq 100 100 4000)
+mapfile -t sizes < <(printf "%s\n" "${seq_sizes[@]}" "${powers_of_two[@]}" | sort -un)
+for n in "${sizes[@]}"; do
+    emit_f32_backend_trio "$batch_size" "$n" "$n" "$n"
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-${batch_size}x${n}x${n}x${n}\""
+    echo "size = $n"
+    echo "batch_size = \"$batch_size\""
+    gflops_value=$(calculate_gflops "$batch_size" "$n" "$n" "$n")
+    echo "gflops = $gflops_value"
+    echo "backend_name = \"morello\""
+    echo "docker_path = \"./morello\""
+    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+    echo ""
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x${n}x${n}x${n}\""
+    echo "size = $n"
+    echo "batch_size = $batch_size"
+    echo 'backend_name = "intel-mkl"'
+    echo 'docker_path = "./intel-mkl"'
+    echo "command = [ \"batch-parallel-u8s8s32\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+    echo "num_cores = $batch_size"
+    echo ""
+done
 done
 
-# Add batch-parallel for 2048x2048x2048 (factorized f32 trio + u8s8s32)
-for batch_size in $(seq 2 15); do
-    emit_f32_backend_trio "$batch_size" 2048 2048 2048
+# Do 2048x2048x2048 at other parallelism factors
+for batch_size in 2 3 4 5 6 7 9 10 11 12 13 14 15; do
+    emit_f32_backend_trio "$batch_size" "2048" "2048" "2048"
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
+    echo "size = 2048"
+    echo "batch_size = \"$batch_size\""
+    gflops_value=$(calculate_gflops "$batch_size" "2048" "2048" "2048")
+    echo "gflops = $gflops_value"
+    echo "backend_name = \"morello\""
+    echo "docker_path = \"./morello\""
+    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    echo ""
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x2048x2048x2048\""
@@ -168,8 +188,6 @@ for batch_size in $(seq 2 15); do
     echo "num_cores = $batch_size"
     echo ""
 done
-
-emit_f32_backend_trio 1 "$m" "$k" "$n"
 
 for mkn in "${mkn_u8s8s16_combinations[@]}"; do
 IFS=',' read -r m k n <<< "$mkn"
