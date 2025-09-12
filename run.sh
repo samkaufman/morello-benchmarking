@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
-# Parse arguments to separate --avx2 for make_config.sh from other args for cherrybench
+# Parse arguments to separate --avx512 for make_config.sh from other args for cherrybench
 make_config_args=()
 cherrybench_args=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --avx2)
+        --avx512)
             make_config_args+=("$1")
             shift
             ;;
