@@ -1,6 +1,22 @@
 #!/usr/bin/env bash
 set -e
 
+# Parse command line arguments
+USE_AVX2=false
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --avx2)
+            USE_AVX2=true
+            shift
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Usage: $0 [--avx2]"
+            exit 1
+            ;;
+    esac
+done
+
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 declare -a power_of_two_sizes=(64 128 256 512 1024)
@@ -147,7 +163,11 @@ for n in "${sizes[@]}"; do
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-    echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+    if [ "$USE_AVX2" = true ]; then
+        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"--avx2\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+    else
+        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+    fi
     echo ""
 
     echo '[[jobs]]'
@@ -175,7 +195,11 @@ for batch_size in 2 3 4 5 6 7 9 10 11 12 13 14 15; do
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-    echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    if [ "$USE_AVX2" = true ]; then
+        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"--avx2\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    else
+        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+    fi
     echo ""
 
     echo '[[jobs]]'
