@@ -1,15 +1,15 @@
 diff --git a/morello/examples/matmul_batch_parallel_x86.rs b/morello/examples/matmul_batch_parallel_x86.rs
-index 55bd4bfd..349e9a46 100644
+index 89c288a1..27b7eddf 100644
 --- a/morello/examples/matmul_batch_parallel_x86.rs
 +++ b/morello/examples/matmul_batch_parallel_x86.rs
-@@ -22,9 +22,16 @@ const N_R: u32 = 16;
+@@ -23,9 +23,16 @@ const N_R: u32 = 16;
  const MOVE_TILE_SIZE: u32 = 32;
  
  fn main() {
 +    let args = std::env::args().collect::<Vec<String>>();
 +
      // Compute a batch=4 matrix multiplication. (Four independent matmuls!)
-     let mut spec: Spec<X86Target> = spec!(MatmulAccum(
+     let mut spec: Spec<Avx2Target> = spec!(MatmulAccum(
 -        [4, 2048, 2048, 2048],
 +        [
 +            args[1].parse::<u32>().unwrap(),
@@ -20,7 +20,7 @@ index 55bd4bfd..349e9a46 100644
          (f32, GL, row_major),
          (f32, GL, row_major),
          (f32, GL, row_major)
-@@ -117,14 +124,6 @@ fn main() {
+@@ -107,14 +114,6 @@ fn main() {
                  .subschedule(&[1, 2], naive_vector_move_impl)
          });
  
@@ -35,7 +35,7 @@ index 55bd4bfd..349e9a46 100644
      // If the verification flag is set, let's additionally double-check that the lowered
      // code builds and produces the correct results.
      #[cfg(feature = "verification")]
-@@ -141,21 +140,10 @@ fn main() {
+@@ -131,21 +130,10 @@ fn main() {
          }
      }
  
@@ -60,4 +60,4 @@ index 55bd4bfd..349e9a46 100644
 +    println!("{}", built_artifact.binary_path().display());
  }
  
- fn naive_scalar_move_impl(move_spec: &Spec<X86Target>) -> ImplNode<X86Target> {
+ fn naive_scalar_move_impl(move_spec: &Spec<Avx2Target>) -> ImplNode<Avx2Target> {
