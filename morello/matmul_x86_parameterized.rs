@@ -116,9 +116,9 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
     n: u32,
     vec_size: DimSize,
 ) -> ImplNode<Tgt> {
-    let vpair_size = nz!(16u32);
+    let vpair_size = DimSize::try_from(vec_size.get() * 2).unwrap();
     let layout_a = layout![0, 1, 2, 1 p(4)];
-    let layout_b = layout![0, 2, 1, 2 p(16)];
+    let layout_b = layout![0, 2, 1, 2 p(vpair_size)];
 
     spec_app.tile_out_ensure_continue(&[1, (m / 4) * 4, n], |a| {
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
@@ -230,6 +230,8 @@ fn schedule_move<Tgt: CpuTarget>(
     spec: &LogicalSpec<Tgt>,
     vec_size: DimSize,
 ) -> ImplNode<Tgt> {
+    let vpair_size = DimSize::try_from(vec_size.get() * 2).unwrap();
+
     let has_rf_param = spec.parameter_level(0) == CpuMemoryLevel::RF
         || spec.parameter_level(1) == CpuMemoryLevel::RF;
     let is_scalar_move = spec.parameter_shape(0).iter().all(|d| d.get() == 1);
@@ -242,7 +244,7 @@ fn schedule_move<Tgt: CpuTarget>(
     {
         apply_rewrites(
             &implementation
-                .tile_out_ensure(&[1, 16, 16])
+                .tile_out_ensure(&[1, 16, vpair_size.get()])
                 .move_param(1, CpuMemoryLevel::L1),
             vec_size,
         )
