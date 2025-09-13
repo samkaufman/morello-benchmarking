@@ -39,14 +39,20 @@ fn main() {
     };
 
     if use_avx512 {
-        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(16u32));
+        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(16u32), nz!(48u32));
     } else {
-        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(8u32));
+        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(8u32), nz!(16u32));
     }
 }
 
-fn main_per_target<Tgt>(batch_size: u32, m: u32, k: u32, n: u32, vec_size: DimSize)
-where
+fn main_per_target<Tgt>(
+    batch_size: u32,
+    m: u32,
+    k: u32,
+    n: u32,
+    vec_size: DimSize,
+    v_n_size: DimSize,
+) where
     Tgt: CpuTarget,
 {
     let mut spec: Spec<Tgt> = spec!(MatmulAccum(
@@ -58,9 +64,9 @@ where
     spec.canonicalize().unwrap();
 
     let implementation = spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| {
-        schedule_single_matmul(s, m, n, vec_size)
+        schedule_single_matmul(s, m, n, vec_size, v_n_size)
     });
-    let implementation = apply_rewrites(&implementation, vec_size);
+    let implementation = apply_rewrites(&implementation, vec_size, v_n_size);
     implementation
         .emit(
             true,
@@ -97,13 +103,14 @@ fn schedule_single_matmul<Tgt: CpuTarget>(
     m: u32,
     n: u32,
     vec_size: DimSize,
+    v_n_size: DimSize,
 ) -> ImplNode<Tgt> {
     spec.tile_out_ensure_continue(&[1, (m / 8) * 8, n], |a| {
         let ImplNode::SpecApp(SpecApp(spec_a, ..)) = a else {
             unreachable!();
         };
         if spec_a.0.parameter_shape(0)[1].get() >= 8 {
-            schedule_single_matmul_m_main(a, m, n, vec_size)
+            schedule_single_matmul_m_main(a, m, n, vec_size, v_n_size)
         } else {
             schedule_single_matmul_boundary(a)
         }
@@ -115,10 +122,10 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
     m: u32,
     n: u32,
     vec_size: DimSize,
+    v_n_size: DimSize,
 ) -> ImplNode<Tgt> {
-    let vpair_size = DimSize::try_from(vec_size.get() * 2).unwrap();
     let layout_a = layout![0, 1, 2, 1 p(4)];
-    let layout_b = layout![0, 2, 1, 2 p(vpair_size)];
+    let layout_b = layout![0, 2, 1, 2 p(v_n_size)];
 
     spec_app.tile_out_ensure_continue(&[1, (m / 4) * 4, n], |a| {
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
@@ -131,43 +138,40 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                 if layout_a.applies_to_shape(&spec_c.0.parameter_shape(0)) {
                     // TODO: move_relayout(0,..) does some redundant work here
                     c.move_relayout(0, CpuMemoryLevel::GL, layout_a.clone(), None)
-                        .tile_out_ensure_continue(
-                            &[1, MC, (n / vpair_size) * vpair_size.get()],
-                            |d| {
-                                d.tile_out_ensure_continue(&[1, MC, NC], |e| {
-                                    let ImplNode::SpecApp(SpecApp(spec_e, ..)) = e else {
-                                        unreachable!();
-                                    };
+                        .tile_out_ensure_continue(&[1, MC, (n / v_n_size) * v_n_size.get()], |d| {
+                            d.tile_out_ensure_continue(&[1, MC, NC], |e| {
+                                let ImplNode::SpecApp(SpecApp(spec_e, ..)) = e else {
+                                    unreachable!();
+                                };
 
-                                    if layout_b.applies_to_shape(&spec_e.0.parameter_shape(1)) {
-                                        // TODO: packing should happen here, but for B, not A, as below:
-                                        //   pack_blockA(&A[p * M + i], blockA_packed, mc, kc, M);
-                                        let lb0 = layout_b.clone();
-                                        e.move_relayout(1, CpuMemoryLevel::GL, lb0, None)
-                                            .tile_out_ensure(&[1, MC, vpair_size.get()])
-                                            .tile_out_ensure(&[1, 4, vpair_size.get()])
-                                            .split_saturating_ensure_continue(64, |f| {
-                                                f.move_param(2, CpuMemoryLevel::L1)
-                                                    .move_vrf(2, CpuMemoryLevel::VRF, vec_size)
-                                                    .split(1)
-                                                    .move_param(1, CpuMemoryLevel::L1)
-                                                    .move_param(0, CpuMemoryLevel::L1)
-                                                    .move_param(0, CpuMemoryLevel::RF)
-                                                    .move_vrf(1, CpuMemoryLevel::VRF, vec_size)
-                                                    .tile_out(&[1, 1, vpair_size.get()])
-                                                    .select(CpuKernel::BroadcastVecMultAdd)
-                                            })
-                                    } else {
-                                        // Case where layout for B doesn't fit B
-                                        // TODO: Improve this naive subschedule
-                                        e.tile_out_ensure_continue(
-                                            &[1, vpair_size.get(), vpair_size.get()],
-                                            schedule_single_matmul_boundary,
-                                        )
-                                    }
-                                })
-                            },
-                        )
+                                if layout_b.applies_to_shape(&spec_e.0.parameter_shape(1)) {
+                                    // TODO: packing should happen here, but for B, not A, as below:
+                                    //   pack_blockA(&A[p * M + i], blockA_packed, mc, kc, M);
+                                    let lb0 = layout_b.clone();
+                                    e.move_relayout(1, CpuMemoryLevel::GL, lb0, None)
+                                        .tile_out_ensure(&[1, MC, v_n_size.get()])
+                                        .tile_out_ensure(&[1, 4, v_n_size.get()])
+                                        .split_saturating_ensure_continue(64, |f| {
+                                            f.move_param(2, CpuMemoryLevel::L1)
+                                                .move_vrf(2, CpuMemoryLevel::VRF, vec_size)
+                                                .split(1)
+                                                .move_param(1, CpuMemoryLevel::L1)
+                                                .move_param(0, CpuMemoryLevel::L1)
+                                                .move_param(0, CpuMemoryLevel::RF)
+                                                .move_vrf(1, CpuMemoryLevel::VRF, vec_size)
+                                                .tile_out(&[1, 1, v_n_size.get()])
+                                                .select(CpuKernel::BroadcastVecMultAdd)
+                                        })
+                                } else {
+                                    // Case where layout for B doesn't fit B
+                                    // TODO: Improve this naive subschedule
+                                    e.tile_out_ensure_continue(
+                                        &[1, v_n_size.get(), v_n_size.get()],
+                                        schedule_single_matmul_boundary,
+                                    )
+                                }
+                            })
+                        })
                 } else {
                     // Case where layout for A doesn't fit A
                     // TODO: Replace this naive schedule. Boundaries for 600-sq. are:
@@ -201,6 +205,7 @@ fn schedule_single_matmul_boundary<Tgt: CpuTarget>(spec_app: &ImplNode<Tgt>) -> 
 fn apply_rewrites<Tgt: CpuTarget>(
     implementation: &ImplNode<Tgt>,
     vec_size: DimSize,
+    v_n_size: DimSize,
 ) -> ImplNode<Tgt> {
     match implementation {
         ImplNode::SpecApp(spec_app) => {
@@ -212,7 +217,7 @@ fn apply_rewrites<Tgt: CpuTarget>(
                         ..
                     },
                     ..,
-                ) => schedule_move(implementation, logical_spec, vec_size),
+                ) => schedule_move(implementation, logical_spec, vec_size, v_n_size),
                 _ => implementation.clone(),
             }
         }
@@ -220,7 +225,7 @@ fn apply_rewrites<Tgt: CpuTarget>(
             implementation
                 .children()
                 .iter()
-                .map(|xc| apply_rewrites(xc, vec_size)),
+                .map(|xc| apply_rewrites(xc, vec_size, v_n_size)),
         ),
     }
 }
@@ -229,35 +234,47 @@ fn schedule_move<Tgt: CpuTarget>(
     implementation: &ImplNode<Tgt>,
     spec: &LogicalSpec<Tgt>,
     vec_size: DimSize,
+    v_n_size: DimSize,
 ) -> ImplNode<Tgt> {
-    let vpair_size = DimSize::try_from(vec_size.get() * 2).unwrap();
-
     let has_rf_param = spec.parameter_level(0) == CpuMemoryLevel::RF
         || spec.parameter_level(1) == CpuMemoryLevel::RF;
     let is_scalar_move = spec.parameter_shape(0).iter().all(|d| d.get() == 1);
     let output_shape = spec.parameter_shape(spec.unique_output_index().unwrap());
 
     if has_rf_param && is_scalar_move {
-        apply_rewrites(&implementation.select(CpuKernel::ValueAssign), vec_size)
+        apply_rewrites(
+            &implementation.select(CpuKernel::ValueAssign),
+            vec_size,
+            v_n_size,
+        )
     } else if spec.parameter_level(0) == CpuMemoryLevel::GL
         && spec.parameter_level(1) == CpuMemoryLevel::GL
     {
         apply_rewrites(
             &implementation
-                .tile_out_ensure(&[1, 16, vpair_size.get()])
+                .tile_out_ensure(&[1, 16, v_n_size.get()])
                 .move_param(1, CpuMemoryLevel::L1),
             vec_size,
+            v_n_size,
         )
     } else if spec.parameter_level(0) == CpuMemoryLevel::GL
         && spec.parameter_level(1) == CpuMemoryLevel::L1
     {
-        apply_rewrites(&implementation.move_param(0, CpuMemoryLevel::L1), vec_size)
+        apply_rewrites(
+            &implementation.move_param(0, CpuMemoryLevel::L1),
+            vec_size,
+            v_n_size,
+        )
     } else if spec.parameter_shape(0).iter().all(|d| d.get() == 1)
         && spec.parameter_shape(1).iter().all(|d| d.get() == 1)
         && spec.parameter_level(0) == CpuMemoryLevel::L1
         && spec.parameter_level(1) == CpuMemoryLevel::L1
     {
-        apply_rewrites(&implementation.move_param(1, CpuMemoryLevel::RF), vec_size)
+        apply_rewrites(
+            &implementation.move_param(1, CpuMemoryLevel::RF),
+            vec_size,
+            v_n_size,
+        )
     } else if spec.parameter_shape(0)[2].get() >= 8
         && spec.parameter_level(0) == CpuMemoryLevel::L1
         && spec.parameter_level(1) == CpuMemoryLevel::L1
@@ -270,6 +287,7 @@ fn schedule_move<Tgt: CpuTarget>(
                 .tile_out_ensure(&[1, 1, 8])
                 .move_vrf(1, CpuMemoryLevel::VRF, nz!(8u32)),
             vec_size,
+            v_n_size,
         )
     } else if output_shape[2].get() >= 8
         && output_shape[2].get() % 8 == 0
@@ -281,17 +299,22 @@ fn schedule_move<Tgt: CpuTarget>(
                 .tile_out_ensure(&[1, 1, vec_size.get()])
                 .select(CpuKernel::VectorAssign),
             vec_size,
+            v_n_size,
         )
     } else if output_shape == shape![1, 16, 16] {
-        apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size)
+        apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size, v_n_size)
     } else if (output_shape[0].get() > 1 || output_shape[1].get() > 1)
         && output_shape[2].get() % 8 == 0
         && spec.parameter(0).layout().is_row_major()
         && spec.parameter(1).layout().is_row_major()
     {
-        apply_rewrites(&implementation.tile_out(&[1, 1, vec_size.get()]), vec_size)
+        apply_rewrites(
+            &implementation.tile_out(&[1, 1, vec_size.get()]),
+            vec_size,
+            v_n_size,
+        )
     } else {
-        apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size)
+        apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size, v_n_size)
     }
 }
 
