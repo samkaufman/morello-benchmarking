@@ -16,9 +16,9 @@ use nonzero::nonzero as nz;
 use std::fmt::Debug;
 use std::{env, io, iter, process};
 
-const MC: u32 = 512;
-const KC: u32 = 512;
-const NC: u32 = 1024;
+const MC: u32 = 528;
+const KC: u32 = 528;
+const NC: u32 = 1056;
 
 fn main() {
     let mut use_avx512 = false;
@@ -39,9 +39,9 @@ fn main() {
     };
 
     if use_avx512 {
-        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(16u32), nz!(48u32));
+        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(16u32), nz!(48u32), nz!(8u32));
     } else {
-        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(8u32), nz!(16u32));
+        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(8u32), nz!(16u32), nz!(4u32));
     }
 }
 
@@ -52,6 +52,7 @@ fn main_per_target<Tgt>(
     n: u32,
     vec_size: DimSize,
     v_n_size: DimSize,
+    mr: DimSize,
 ) where
     Tgt: CpuTarget,
 {
@@ -64,7 +65,7 @@ fn main_per_target<Tgt>(
     spec.canonicalize().unwrap();
 
     let implementation = spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| {
-        schedule_single_matmul(s, m, n, vec_size, v_n_size)
+        schedule_single_matmul(s, m, n, vec_size, v_n_size, mr)
     });
     let implementation = apply_rewrites(&implementation, vec_size, v_n_size);
     implementation
@@ -104,15 +105,16 @@ fn schedule_single_matmul<Tgt: CpuTarget>(
     n: u32,
     vec_size: DimSize,
     v_n_size: DimSize,
+    mr: DimSize,
 ) -> ImplNode<Tgt> {
     spec.tile_out_ensure_continue(&[1, (m / 8) * 8, n], |a| {
         let ImplNode::SpecApp(SpecApp(spec_a, ..)) = a else {
             unreachable!();
         };
         if spec_a.0.parameter_shape(0)[1].get() >= 8 {
-            schedule_single_matmul_m_main(a, m, n, vec_size, v_n_size)
+            schedule_single_matmul_m_main(a, m, n, vec_size, v_n_size, mr)
         } else {
-            schedule_single_matmul_boundary(a)
+            schedule_single_matmul_boundary(a, mr)
         }
     })
 }
@@ -123,11 +125,12 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
     n: u32,
     vec_size: DimSize,
     v_n_size: DimSize,
+    mr: DimSize,
 ) -> ImplNode<Tgt> {
-    let layout_a = layout![0, 1, 2, 1 p(4)];
+    let layout_a = layout![0, 1, 2, 1 p(mr)];
     let layout_b = layout![0, 2, 1, 2 p(v_n_size)];
 
-    spec_app.tile_out_ensure_continue(&[1, (m / 4) * 4, n], |a| {
+    spec_app.tile_out_ensure_continue(&[1, (m / mr.get()) * mr.get(), n], |a| {
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
             b.split_saturating_ensure_continue(KC, |c| {
                 // TODO: packing should happen here, but for A, not B, as below:
@@ -150,7 +153,7 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                                     let lb0 = layout_b.clone();
                                     e.move_relayout(1, CpuMemoryLevel::GL, lb0, None)
                                         .tile_out_ensure(&[1, MC, v_n_size.get()])
-                                        .tile_out_ensure(&[1, 4, v_n_size.get()])
+                                        .tile_out_ensure(&[1, mr.get(), v_n_size.get()])
                                         .split_saturating_ensure_continue(64, |f| {
                                             f.move_param(2, CpuMemoryLevel::L1)
                                                 .move_vrf(2, CpuMemoryLevel::VRF, vec_size)
@@ -163,11 +166,10 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                                                 .select(CpuKernel::BroadcastVecMultAdd)
                                         })
                                 } else {
-                                    // Case where layout for B doesn't fit B
                                     // TODO: Improve this naive subschedule
                                     e.tile_out_ensure_continue(
                                         &[1, v_n_size.get(), v_n_size.get()],
-                                        schedule_single_matmul_boundary,
+                                        |a| schedule_single_matmul_boundary(a, mr),
                                     )
                                 }
                             })
@@ -177,19 +179,22 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                     // TODO: Replace this naive schedule. Boundaries for 600-sq. are:
                     //   - MatmulAccum((1×8×256, f32, GL, RM:c1), (1×256×600, f32, GL), (1×8×600, f32, GL))
                     //   - MatmulAccum((1×8×88, f32, GL, RM:c1), (1×88×600, f32, GL), (1×8×600, f32, GL))
-                    schedule_single_matmul_boundary(c)
+                    schedule_single_matmul_boundary(c, mr)
                 }
             })
         })
     })
 }
 
-fn schedule_single_matmul_boundary<Tgt: CpuTarget>(spec_app: &ImplNode<Tgt>) -> ImplNode<Tgt> {
+fn schedule_single_matmul_boundary<Tgt: CpuTarget>(
+    spec_app: &ImplNode<Tgt>,
+    mr: DimSize,
+) -> ImplNode<Tgt> {
     // todo!("{}", spec_app.spec().unwrap());
     spec_app
-        // TODO: The initial 4x4 tiling of mxn works around no support for "direct"
+        // TODO: The first tiling below works around no support for "direct"
         //   tiling through Packed dimensions.
-        .tile_out_ensure(&[1, 4, 4])
+        .tile_out_ensure(&[1, mr.get(), 4])
         .tile_out_ensure(&[1, 1, 4])
         .split(1)
         .move_param(0, CpuMemoryLevel::L1)
@@ -275,7 +280,7 @@ fn schedule_move<Tgt: CpuTarget>(
             vec_size,
             v_n_size,
         )
-    } else if spec.parameter_shape(0)[2].get() >= 8
+    } else if spec.parameter_shape(0)[2].get() >= vec_size.get()
         && spec.parameter_level(0) == CpuMemoryLevel::L1
         && spec.parameter_level(1) == CpuMemoryLevel::L1
         && spec.parameter(0).is_contiguous()
@@ -284,13 +289,13 @@ fn schedule_move<Tgt: CpuTarget>(
     {
         apply_rewrites(
             &implementation
-                .tile_out_ensure(&[1, 1, 8])
-                .move_vrf(1, CpuMemoryLevel::VRF, nz!(8u32)),
+                .tile_out_ensure(&[1, 1, vec_size.get()])
+                .move_vrf(1, CpuMemoryLevel::VRF, vec_size),
             vec_size,
             v_n_size,
         )
-    } else if output_shape[2].get() >= 8
-        && output_shape[2].get() % 8 == 0
+    } else if output_shape[2].get() >= vec_size.get()
+        && output_shape[2].get() % vec_size.get() == 0
         && spec.parameter(0).is_contiguous()
         && spec.parameter(1).is_contiguous()
     {
@@ -304,7 +309,7 @@ fn schedule_move<Tgt: CpuTarget>(
     } else if output_shape == shape![1, 16, 16] {
         apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size, v_n_size)
     } else if (output_shape[0].get() > 1 || output_shape[1].get() > 1)
-        && output_shape[2].get() % 8 == 0
+        && output_shape[2].get() % vec_size.get() == 0
         && spec.parameter(0).layout().is_row_major()
         && spec.parameter(1).layout().is_row_major()
     {
