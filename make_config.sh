@@ -17,6 +17,14 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+PHYSICAL_CORES=$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | wc -l | tr -d '[:space:]')
+if ! [[ "$PHYSICAL_CORES" =~ ^[0-9]+$ ]] || [ "$PHYSICAL_CORES" -lt 4 ]; then
+    echo "Error: detected physical cores ('$PHYSICAL_CORES') is less than 4 or invalid." >&2
+    exit 1
+fi
+
+declare -a SMALL_PARALLEL_FACTORS=(1 "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORES")
+
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 declare -a power_of_two_sizes=(64 128 256 512 1024)
@@ -147,7 +155,7 @@ done
 # done
 
 # Add batch-parallel for most square shapes
-for batch_size in 1 8 16; do
+for batch_size in "${SMALL_PARALLEL_FACTORS[@]}"; do
 # iterate over multiples of 100 (100..4000) plus all powers of two 128..4096
 mapfile -t seq_sizes < <(seq 100 100 4000)
 mapfile -t sizes < <(printf "%s\n" "${seq_sizes[@]}" "${powers_of_two[@]}" | sort -un)
@@ -183,7 +191,7 @@ done
 done
 
 # Do 2048x2048x2048 at other parallelism factors
-for batch_size in 2 3 4 5 6 7 9 10 11 12 13 14 15; do
+for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 ))$/d" -e "/^$PHYSICAL_CORES$/d"); do
     emit_f32_backend_trio "$batch_size" "2048" "2048" "2048"
 
     echo '[[jobs]]'
