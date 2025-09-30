@@ -1,5 +1,8 @@
 use morello::codegen::CodeGen;
-use morello::common::DimSize;
+use morello::common::{DimSize, Shape};
+use morello::db::FilesDatabase;
+use morello::grid::canon::CanonicalBimap;
+use morello::grid::general::BiMap;
 use morello::imp::functions::FunctionApp;
 use morello::imp::subspecs::SpecApp;
 use morello::imp::{Impl, ImplNode};
@@ -13,12 +16,15 @@ use morello::target::{Avx512Target, CpuKernel, CpuMemoryLevel, CpuTarget, Target
 use morello::utils::ToWriteFmt;
 use morello::{shape, spec};
 use nonzero::nonzero as nz;
+use smallvec::SmallVec;
 use std::fmt::Debug;
+use std::path::Path;
 use std::{env, io, iter, process};
 
 const MC: u32 = 528;
 const KC: u32 = 528;
 const NC: u32 = 1056;
+const K_SPLIT: u32 = 48; // TODO: Get rid of this.
 
 fn main() {
     let mut use_avx512 = false;
@@ -55,7 +61,14 @@ fn main_per_target<Tgt>(
     mr: DimSize,
 ) where
     Tgt: CpuTarget,
+    Tgt::Level: CanonicalBimap,
+    <Tgt::Level as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
 {
+    let db = FilesDatabase::new(
+        // Some(Path::new("/tmp/working_matmul_db_2025sep29")),
+        None, true, 1, 10_000, 1,
+    );
+
     let mut spec: Spec<Tgt> = spec!(MatmulAccum(
         [batch_size, m, k, n],
         (f32, GL, row_major),
@@ -65,9 +78,10 @@ fn main_per_target<Tgt>(
     spec.canonicalize().unwrap();
 
     let implementation = spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| {
-        schedule_single_matmul(s, m, n, vec_size, v_n_size, mr)
+        schedule_serial_matmul(s, m, n, vec_size, v_n_size, mr)
     });
     let implementation = apply_rewrites(&implementation, vec_size, v_n_size);
+    let implementation = implementation.synthesize_all(&db);
     implementation
         .emit(
             true,
@@ -99,7 +113,7 @@ fn main_per_target<Tgt>(
     println!("{}", build_result.binary_path().display());
 }
 
-fn schedule_single_matmul<Tgt: CpuTarget>(
+fn schedule_serial_matmul<Tgt: CpuTarget>(
     spec: &ImplNode<Tgt>,
     m: u32,
     n: u32,
@@ -107,16 +121,17 @@ fn schedule_single_matmul<Tgt: CpuTarget>(
     v_n_size: DimSize,
     mr: DimSize,
 ) -> ImplNode<Tgt> {
-    spec.tile_out_ensure_continue(&[1, (m / 8) * 8, n], |a| {
-        let ImplNode::SpecApp(SpecApp(spec_a, ..)) = a else {
-            unreachable!();
-        };
-        if spec_a.0.parameter_shape(0)[1].get() >= 8 {
-            schedule_single_matmul_m_main(a, m, n, vec_size, v_n_size, mr)
-        } else {
-            schedule_single_matmul_boundary(a, mr)
-        }
-    })
+    // spec.tile_out_ensure_continue(&[1, (m / 8) * 8, n], |a| {
+    //     let ImplNode::SpecApp(SpecApp(spec_a, ..)) = a else {
+    //         unreachable!();
+    //     };
+    //     if spec_a.0.parameter_shape(0)[1].get() >= 8 {
+    //         schedule_single_matmul_m_main(a, m, n, vec_size, v_n_size, mr)
+    //     } else {
+    //         schedule_single_matmul_boundary(a, mr)
+    //     }
+    // })
+    schedule_single_matmul_m_main(spec, m, n, vec_size, v_n_size, mr)
 }
 
 fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
@@ -127,84 +142,91 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
     v_n_size: DimSize,
     mr: DimSize,
 ) -> ImplNode<Tgt> {
-    let layout_a = layout![0, 1, 2, 1 p(mr)];
-    let layout_b = layout![0, 2, 1, 2 p(v_n_size)];
-
     spec_app.tile_out_ensure_continue(&[1, (m / mr.get()) * mr.get(), n], |a| {
+        // layout_a packs the M dimension up to size `mr`. (If smaller than `mr`, layout_a will
+        // just be canonicalized to batched column-major.)
+        let ImplNode::SpecApp(SpecApp(spec_a, ..)) = a else {
+            unreachable!();
+        };
+        let m_inner = spec_a.0.parameter_shape(0)[1].min(mr);
+        let layout_a = layout![0, 1, 2, 1 p(m_inner)];
+
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
             b.split_saturating_ensure_continue(KC, |c| {
-                // TODO: packing should happen here, but for A, not B, as below:
-                //   pack_blockB(&B[j * K + p], blockB_packed, nc, kc, K);
-                let ImplNode::SpecApp(SpecApp(spec_c, ..)) = c else {
-                    unreachable!();
-                };
-                if layout_a.applies_to_shape(&spec_c.0.parameter_shape(0)) {
-                    // TODO: move_relayout(0,..) does some redundant work here
-                    c.move_relayout(0, CpuMemoryLevel::GL, layout_a.clone(), None)
-                        .tile_out_ensure_continue(&[1, MC, (n / v_n_size) * v_n_size.get()], |d| {
-                            d.tile_out_ensure_continue(&[1, MC, NC], |e| {
-                                let ImplNode::SpecApp(SpecApp(spec_e, ..)) = e else {
-                                    unreachable!();
-                                };
+                // TODO: move_relayout(0,..) does some redundant work here
+                c.move_relayout(0, CpuMemoryLevel::GL, layout_a.clone(), None)
+                    .tile_out_ensure_continue(&[1, MC, (n / v_n_size) * v_n_size.get()], |d| {
+                        let ImplNode::SpecApp(SpecApp(spec_d, ..)) = d else {
+                            unreachable!();
+                        };
+                        let n_inner = spec_d.0.parameter_shape(1)[2].min(v_n_size);
+                        let layout_b = layout![0, 2, 1, 2 p(n_inner)];
 
-                                if layout_b.applies_to_shape(&spec_e.0.parameter_shape(1)) {
-                                    // TODO: packing should happen here, but for B, not A, as below:
-                                    //   pack_blockA(&A[p * M + i], blockA_packed, mc, kc, M);
-                                    let lb0 = layout_b.clone();
-                                    e.move_relayout(1, CpuMemoryLevel::GL, lb0, None)
-                                        .tile_out_ensure(&[1, MC, v_n_size.get()])
-                                        .tile_out_ensure(&[1, mr.get(), v_n_size.get()])
-                                        .split_saturating_ensure_continue(64, |f| {
-                                            f.move_param(2, CpuMemoryLevel::L1)
-                                                .move_vrf(2, CpuMemoryLevel::VRF, vec_size)
-                                                .split(1)
-                                                .move_param(1, CpuMemoryLevel::L1)
-                                                .move_param(0, CpuMemoryLevel::L1)
-                                                .move_param(0, CpuMemoryLevel::RF)
-                                                .move_vrf(1, CpuMemoryLevel::VRF, vec_size)
-                                                .tile_out(&[1, 1, v_n_size.get()])
-                                                .select(CpuKernel::BroadcastVecMultAdd)
+                        d.tile_out_ensure_continue(&[1, MC, NC], |e| {
+                            let lb0 = layout_b.clone();
+                            let e = e.move_relayout(1, CpuMemoryLevel::GL, lb0, None);
+                            chain_tile(
+                                &e,
+                                &[
+                                    shape![1, MC, v_n_size.get()],
+                                    shape![1, MC, 8],
+                                    shape![1, MC, 4],
+                                ],
+                                &|f| {
+                                    f.tile_out_ensure(&[1, mr.get(), v_n_size.get()])
+                                        .split_saturating_ensure_continue(K_SPLIT, |i| {
+                                            let ImplNode::SpecApp(SpecApp(spec_i, ..)) = i else {
+                                                unreachable!();
+                                            };
+                                            if spec_i.0.parameter_shape(1)[2] >= v_n_size {
+                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                    .move_vrf(2, CpuMemoryLevel::VRF, vec_size)
+                                                    .split(1)
+                                                    .move_param(1, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::RF)
+                                                    .move_vrf(1, CpuMemoryLevel::VRF, vec_size)
+                                                    .tile_out(&[1, 1, v_n_size.get()])
+                                                    .select(CpuKernel::BroadcastVecMultAdd)
+                                            } else if spec_i.0.parameter_shape(1)[2] >= nz!(8u32) {
+                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                    .move_vrf(2, CpuMemoryLevel::VRF, nz!(8u32))
+                                                    .split(1)
+                                                    .move_param(1, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::RF)
+                                                    .move_vrf(1, CpuMemoryLevel::VRF, nz!(8u32))
+                                                    .tile_out(&[1, 1, 8])
+                                                    .select(CpuKernel::BroadcastVecMultAdd)
+                                            } else if spec_i.0.parameter_shape(1)[2] >= nz!(4u32) {
+                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                    .move_vrf(2, CpuMemoryLevel::VRF, nz!(4u32))
+                                                    .split(1)
+                                                    .move_param(1, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::RF)
+                                                    .move_vrf(1, CpuMemoryLevel::VRF, nz!(4u32))
+                                                    .tile_out(&[1, 1, 4])
+                                                    .select(CpuKernel::BroadcastVecMultAdd)
+                                            } else {
+                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                    .split(1)
+                                                    .move_param(1, CpuMemoryLevel::L1)
+                                                    .move_param(0, CpuMemoryLevel::L1)
+                                                    .tile_out(&[1, 1, 1])
+                                                    .move_param(2, CpuMemoryLevel::RF)
+                                                    .move_param(0, CpuMemoryLevel::RF)
+                                                    .move_param(1, CpuMemoryLevel::RF)
+                                                    .select(CpuKernel::MultAdd)
+                                            }
                                         })
-                                } else {
-                                    // TODO: Improve this naive subschedule
-                                    e.tile_out_ensure_continue(
-                                        &[1, v_n_size.get(), v_n_size.get()],
-                                        |a| schedule_single_matmul_boundary(a, mr),
-                                    )
-                                }
-                            })
+                                },
+                            )
                         })
-                } else {
-                    // Case where layout for A doesn't fit A
-                    // TODO: Replace this naive schedule. Boundaries for 600-sq. are:
-                    //   - MatmulAccum((1×8×256, f32, GL, RM:c1), (1×256×600, f32, GL), (1×8×600, f32, GL))
-                    //   - MatmulAccum((1×8×88, f32, GL, RM:c1), (1×88×600, f32, GL), (1×8×600, f32, GL))
-                    schedule_single_matmul_boundary(c, mr)
-                }
+                    })
             })
         })
     })
-}
-
-fn schedule_single_matmul_boundary<Tgt: CpuTarget>(
-    spec_app: &ImplNode<Tgt>,
-    mr: DimSize,
-) -> ImplNode<Tgt> {
-    // todo!("{}", spec_app.spec().unwrap());
-    spec_app
-        // TODO: The first tiling below works around no support for "direct"
-        //   tiling through Packed dimensions.
-        .tile_out_ensure(&[1, mr.get(), 4])
-        .tile_out_ensure(&[1, 1, 4])
-        .split(1)
-        .move_param(0, CpuMemoryLevel::L1)
-        .move_param(1, CpuMemoryLevel::L1)
-        .move_param(2, CpuMemoryLevel::L1)
-        .move_relayout(0, CpuMemoryLevel::RF, row_major, None)
-        .move_relayout(1, CpuMemoryLevel::RF, row_major, None)
-        .move_relayout(2, CpuMemoryLevel::RF, row_major, None)
-        .tile_out_ensure(&[1, 1, 1])
-        .select(CpuKernel::MultAdd)
 }
 
 fn apply_rewrites<Tgt: CpuTarget>(
@@ -222,7 +244,7 @@ fn apply_rewrites<Tgt: CpuTarget>(
                         ..
                     },
                     ..,
-                ) => schedule_move(implementation, logical_spec, vec_size, v_n_size),
+                ) => schedule_move(implementation, &spec_app.0, vec_size, v_n_size),
                 _ => implementation.clone(),
             }
         }
@@ -237,89 +259,93 @@ fn apply_rewrites<Tgt: CpuTarget>(
 
 fn schedule_move<Tgt: CpuTarget>(
     implementation: &ImplNode<Tgt>,
-    spec: &LogicalSpec<Tgt>,
+    spec: &Spec<Tgt>,
     vec_size: DimSize,
     v_n_size: DimSize,
 ) -> ImplNode<Tgt> {
-    let has_rf_param = spec.parameter_level(0) == CpuMemoryLevel::RF
-        || spec.parameter_level(1) == CpuMemoryLevel::RF;
-    let is_scalar_move = spec.parameter_shape(0).iter().all(|d| d.get() == 1);
-    let output_shape = spec.parameter_shape(spec.unique_output_index().unwrap());
+    if format!("{}", spec.0) == "Move((1×16×16, f32, L1, RM:c1), (1×16×16, f32, L1, <[1,2,1], [Dynamic, Dynamic, Packed(8)]>:c2), serial)"
+        || format!("{}", spec.0) == "Move((1×16×16, f32, L1, RM:c1), (1×16×16, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×16, f32, L1, RM:c1), (1×8×16, f32, VRF, RM:c1, 16), serial)"
+        || format!("{}", spec.0) == "Move((1×16×8, f32, L1, RM:c1), (1×16×8, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×16×4, f32, L1, RM:c1), (1×16×4, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×8, f32, L1, RM:c1), (1×8×8, f32, VRF, 8), serial)"
+        || format!("{}", spec.0) == "Move((1×16×8, f32, L1, RM:c1), (1×16×8, f32, L1, <[1,2,1], [Dynamic, Dynamic, Packed(8)]>:c2), serial)"
+        || format!("{}", spec.0) == "Move((1×8×8, f32, VRF, 8), (1×8×8, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×16, f32, L1, RM:c1), (1×8×16, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×4, f32, L1, RM:c1), (1×8×4, f32, VRF, 4), serial)"
+        || format!("{}", spec.0) == "Move((1×4×16, f32, L1, RM:c1), (1×4×16, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×8, f32, L1, RM:c1), (1×8×8, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×4×8, f32, L1, RM:c1), (1×4×8, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×4, f32, VRF, 4), (1×8×4, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×4, f32, L1, RM:c1), (1×8×4, f32, L1, RM:c1), serial)"
+        || format!("{}", spec.0) == "Move((1×8×8, f32, L1, RM:c1), (1×8×8, f32, L1, [2,1]), serial)"
+        || format!("{}", spec.0) == "Move((1×4×16, f32, L1, RM:c1), (1×4×16, f32, L1, [2,1]), serial)"
+        || format!("{}", spec.0) == "Move((1×4×8, f32, L1, RM:c1), (1×4×8, f32, L1, [2,1]), serial)"
+    {
+        return apply_rewrites(&implementation.tile_out_saturating(&[1, 1, 16]), vec_size, v_n_size);
+    }
+    if format!("{}", spec.0) == "Move((1×16×4, f32, L1, RM:c1), (1×16×4, f32, L1, <[1,2,1], [Dynamic, Dynamic, Packed(8)]>:c2), serial)"
+        || format!("{}", spec.0) == "Move((1×8×16, f32, L1, RM:c1), (1×8×16, f32, L1, [2,1]), serial)"
+        || format!("{}", spec.0) == "Move((1×8×4, f32, L1, RM:c1), (1×8×4, f32, L1, [2,1]), serial)"
+    {
+        return apply_rewrites(&implementation.tile_out_saturating(&[1, 16, 1]), vec_size, v_n_size);
+    }
 
-    if has_rf_param && is_scalar_move {
-        apply_rewrites(
-            &implementation.select(CpuKernel::ValueAssign),
-            vec_size,
-            v_n_size,
-        )
-    } else if spec.parameter_level(0) == CpuMemoryLevel::GL
-        && spec.parameter_level(1) == CpuMemoryLevel::GL
+    let output_idx = spec.0.unique_output_index().unwrap();
+    let new_tile_shape: Vec<u32> = spec
+        .0
+        .parameter_shape(output_idx)
+        .iter()
+        .map(|o| morello::utils::prev_power_of_two_u32(o.get().min(16)))
+        .collect();
+    let mut new_impl = implementation.tile_out_ensure(&new_tile_shape);
+    let mut changed = false;
+    if new_impl.spec().unwrap().0.parameter_shape(output_idx) != spec.0.parameter_shape(output_idx)
     {
-        apply_rewrites(
-            &implementation
-                .tile_out_ensure(&[1, 16, v_n_size.get()])
-                .move_param(1, CpuMemoryLevel::L1),
-            vec_size,
-            v_n_size,
-        )
-    } else if spec.parameter_level(0) == CpuMemoryLevel::GL
-        && spec.parameter_level(1) == CpuMemoryLevel::L1
-    {
-        apply_rewrites(
-            &implementation.move_param(0, CpuMemoryLevel::L1),
-            vec_size,
-            v_n_size,
-        )
-    } else if spec.parameter_shape(0).iter().all(|d| d.get() == 1)
-        && spec.parameter_shape(1).iter().all(|d| d.get() == 1)
-        && spec.parameter_level(0) == CpuMemoryLevel::L1
-        && spec.parameter_level(1) == CpuMemoryLevel::L1
-    {
-        apply_rewrites(
-            &implementation.move_param(1, CpuMemoryLevel::RF),
-            vec_size,
-            v_n_size,
-        )
-    } else if spec.parameter_shape(0)[2].get() >= vec_size.get()
-        && spec.parameter_level(0) == CpuMemoryLevel::L1
-        && spec.parameter_level(1) == CpuMemoryLevel::L1
-        && spec.parameter(0).is_contiguous()
-        && spec.parameter(1).is_contiguous()
-        && spec.parameter(0).layout() == spec.parameter(1).layout()
-    {
-        apply_rewrites(
-            &implementation
-                .tile_out_ensure(&[1, 1, vec_size.get()])
-                .move_vrf(1, CpuMemoryLevel::VRF, vec_size),
-            vec_size,
-            v_n_size,
-        )
-    } else if output_shape[2].get() >= vec_size.get()
-        && output_shape[2].get() % vec_size.get() == 0
-        && spec.parameter(0).is_contiguous()
-        && spec.parameter(1).is_contiguous()
-    {
-        apply_rewrites(
-            &implementation
-                .tile_out_ensure(&[1, 1, vec_size.get()])
-                .select(CpuKernel::VectorAssign),
-            vec_size,
-            v_n_size,
-        )
-    } else if output_shape == shape![1, 16, 16] {
-        apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size, v_n_size)
-    } else if (output_shape[0].get() > 1 || output_shape[1].get() > 1)
-        && output_shape[2].get() % vec_size.get() == 0
-        && spec.parameter(0).layout().is_row_major()
-        && spec.parameter(1).layout().is_row_major()
-    {
-        apply_rewrites(
-            &implementation.tile_out(&[1, 1, vec_size.get()]),
-            vec_size,
-            v_n_size,
-        )
+        changed = true;
+    }
+    if spec.0.parameter_level(0) == CpuMemoryLevel::GL {
+        new_impl = new_impl.move_param(0, CpuMemoryLevel::L1);
+        changed = true;
+    }
+    if spec.0.parameter_level(1) == CpuMemoryLevel::GL {
+        new_impl = new_impl.move_param(1, CpuMemoryLevel::L1);
+        changed = true;
+    }
+    if changed {
+        new_impl = apply_rewrites(&new_impl, vec_size, v_n_size);
+    }
+    new_impl
+}
+
+fn chain_tile<Tgt, F>(imp: &ImplNode<Tgt>, shapes: &[Shape], inner_fn: &F) -> ImplNode<Tgt>
+where
+    Tgt: CpuTarget,
+    F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
+{
+    if let Some(next_shape) = shapes.first() {
+        let next_shape_u32: SmallVec<[u32; 5]> = next_shape.iter().map(|d| d.get()).collect();
+        imp.tile_out_ensure_continue(&next_shape_u32, |child| {
+            let ImplNode::SpecApp(child_app) = child else {
+                unreachable!();
+            };
+            if child_app.0 .0.unique_output().unwrap().shape() == &next_shape[..] {
+                inner_fn(child)
+            } else {
+                chain_tile(child, &shapes[1..], inner_fn)
+            }
+        })
     } else {
-        apply_rewrites(&implementation.tile_out(&[1, 1, 1]), vec_size, v_n_size)
+        inner_fn(imp)
+    }
+}
+
+fn faster_level<Tgt: CpuTarget>(source: Tgt::Level) -> Vec<CpuMemoryLevel> {
+    match source.into() {
+        CpuMemoryLevel::GL => vec![CpuMemoryLevel::L1],
+        CpuMemoryLevel::L1 => vec![CpuMemoryLevel::VRF],
+        CpuMemoryLevel::RF => vec![],
+        CpuMemoryLevel::VRF => vec![],
     }
 }
 
@@ -344,7 +370,7 @@ trait TileOutContinue<Tgt: CpuTarget>: SchedulingSugar<Tgt> {
 }
 
 impl<Tgt: CpuTarget> TileOutContinue<Tgt> for Spec<Tgt> {
-    fn tile_out_ensure_continue<F>(&self, output_shape: &[u32], continuation: F) -> ImplNode<Tgt>
+    fn tile_out_ensure_continue<F>(&self, _output_shape: &[u32], _continuation: F) -> ImplNode<Tgt>
     where
         F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
     {
@@ -363,7 +389,7 @@ impl<Tgt: CpuTarget> TileOutContinue<Tgt> for Spec<Tgt> {
         apply_fn_to_leaves(&new_loop, &continuation)
     }
 
-    fn split_saturating_ensure_continue<F>(&self, k: u32, continuation: F) -> ImplNode<Tgt>
+    fn split_saturating_ensure_continue<F>(&self, _k: u32, _continuation: F) -> ImplNode<Tgt>
     where
         F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
     {
