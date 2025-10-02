@@ -24,7 +24,6 @@ use std::{env, io, iter, process};
 const MC: u32 = 528;
 const KC: u32 = 528;
 const NC: u32 = 1056;
-const K_SPLIT: u32 = 48; // TODO: Get rid of this.
 
 fn main() {
     let mut use_avx512 = false;
@@ -75,6 +74,9 @@ fn main_per_target<Tgt>(
         (f32, GL, row_major),
         (f32, GL, row_major)
     ));
+    if batch_size == 1 {
+        spec.0.set_serial_only(true);
+    }
     spec.canonicalize().unwrap();
 
     let implementation = spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| {
@@ -154,8 +156,14 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
             b.split_saturating_ensure_continue(KC, |c| {
                 // TODO: move_relayout(0,..) does some redundant work here
+                let stripped_n = (n / v_n_size) * v_n_size.get(); // peels some off for Packed dim.
                 c.move_relayout(0, CpuMemoryLevel::GL, layout_a.clone(), None)
-                    .tile_out_ensure_continue(&[1, MC, (n / v_n_size) * v_n_size.get()], |d| {
+                    .tile_out_ensure_continue(&[1, MC, stripped_n], |d| {
+                        // eprintln!(
+                        //     "\x1b[1mmade stripped tile\x1b[0m {}\n  from {}",
+                        //     d.spec().unwrap().0,
+                        //     c.spec().unwrap().0
+                        // );
                         let ImplNode::SpecApp(SpecApp(spec_d, ..)) = d else {
                             unreachable!();
                         };
@@ -163,23 +171,40 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                         let layout_b = layout![0, 2, 1, 2 p(n_inner)];
 
                         d.tile_out_ensure_continue(&[1, MC, NC], |e| {
+                            let ImplNode::SpecApp(SpecApp(spec_e, ..)) = &e else {
+                                unreachable!();
+                            };
+                            // eprintln!(
+                            //     "made inner tile {}\n  from {}",
+                            //     e.spec().unwrap().0,
+                            //     spec_d.0
+                            // );
+
                             let lb0 = layout_b.clone();
                             let e = e.move_relayout(1, CpuMemoryLevel::GL, lb0, None);
+                            let mc_tile_size = spec_e.0.parameter_shape(0)[1].get();
                             chain_tile(
                                 &e,
                                 &[
-                                    shape![1, MC, v_n_size.get()],
-                                    shape![1, MC, 8],
-                                    shape![1, MC, 4],
+                                    shape![1, mc_tile_size, v_n_size.get()],
+                                    shape![1, mc_tile_size, 8],
+                                    shape![1, mc_tile_size, 4],
                                 ],
                                 &|f| {
-                                    f.tile_out_ensure(&[1, mr.get(), v_n_size.get()])
-                                        .split_saturating_ensure_continue(K_SPLIT, |i| {
-                                            let ImplNode::SpecApp(SpecApp(spec_i, ..)) = i else {
+                                    f.tile_out_ensure_continue(
+                                        &[1, mr.get(), v_n_size.get()],
+                                        |i| {
+                                            let ImplNode::SpecApp(SpecApp(spec_i, ..)) = &i else {
                                                 unreachable!();
                                             };
                                             if spec_i.0.parameter_shape(1)[2] >= v_n_size {
-                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                // eprintln!(
+                                                //     "\x1b[4musing kernel_{v_n_size}\x1b[0m for {}",
+                                                //     spec_i.0
+                                                // );
+                                                i
+                                                    // .timed_region(format!("kernel_{v_n_size}"))
+                                                    .move_param(2, CpuMemoryLevel::L1)
                                                     .move_vrf(2, CpuMemoryLevel::VRF, vec_size)
                                                     .split(1)
                                                     .move_param(1, CpuMemoryLevel::L1)
@@ -189,7 +214,13 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                                                     .tile_out(&[1, 1, v_n_size.get()])
                                                     .select(CpuKernel::BroadcastVecMultAdd)
                                             } else if spec_i.0.parameter_shape(1)[2] >= nz!(8u32) {
-                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                // eprintln!(
+                                                //     "\x1b[4musing kernel_8\x1b[0m for {}",
+                                                //     spec_i.0
+                                                // );
+                                                i
+                                                    // .timed_region("kernel_8")
+                                                    .move_param(2, CpuMemoryLevel::L1)
                                                     .move_vrf(2, CpuMemoryLevel::VRF, nz!(8u32))
                                                     .split(1)
                                                     .move_param(1, CpuMemoryLevel::L1)
@@ -199,7 +230,13 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                                                     .tile_out(&[1, 1, 8])
                                                     .select(CpuKernel::BroadcastVecMultAdd)
                                             } else if spec_i.0.parameter_shape(1)[2] >= nz!(4u32) {
-                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                // eprintln!(
+                                                //     "\x1b[4musing kernel_4\x1b[0m for {}",
+                                                //     spec_i.0
+                                                // );
+                                                i
+                                                    // .timed_region("kernel_4")
+                                                    .move_param(2, CpuMemoryLevel::L1)
                                                     .move_vrf(2, CpuMemoryLevel::VRF, nz!(4u32))
                                                     .split(1)
                                                     .move_param(1, CpuMemoryLevel::L1)
@@ -209,7 +246,13 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                                                     .tile_out(&[1, 1, 4])
                                                     .select(CpuKernel::BroadcastVecMultAdd)
                                             } else {
-                                                i.move_param(2, CpuMemoryLevel::L1)
+                                                // eprintln!(
+                                                //     "\x1b[4musing kernel_tiny\x1b[0m for {}",
+                                                //     spec_i.0
+                                                // );
+                                                i
+                                                    // .timed_region("kernel_tiny")
+                                                    .move_param(2, CpuMemoryLevel::L1)
                                                     .split(1)
                                                     .move_param(1, CpuMemoryLevel::L1)
                                                     .move_param(0, CpuMemoryLevel::L1)
@@ -219,7 +262,8 @@ fn schedule_single_matmul_m_main<Tgt: CpuTarget>(
                                                     .move_param(1, CpuMemoryLevel::RF)
                                                     .select(CpuKernel::MultAdd)
                                             }
-                                        })
+                                        },
+                                    )
                                 },
                             )
                         })
