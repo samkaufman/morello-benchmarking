@@ -163,8 +163,8 @@ done
 
 # Add batch-parallel for most square shapes
 for batch_size in "${SMALL_PARALLEL_FACTORS[@]}"; do
-# iterate over multiples of 100 (100..4000) plus all powers of two 128..4096
-mapfile -t seq_sizes < <(seq 100 100 4000)
+# iterate over multiples of 96 (48*2) (100..4000) plus all powers of two 128..4096
+mapfile -t seq_sizes < <(seq 100 96 4000)
 mapfile -t sizes < <(printf "%s\n" "${seq_sizes[@]}" "${powers_of_two[@]}" | sort -un)
 for n in "${sizes[@]}"; do
     emit_f32_backend_trio "$batch_size" "$n" "$n" "$n"
