@@ -7,7 +7,7 @@ cherrybench_args=()
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --avx512)
+        --avx512|--no-timeout)
             make_config_args+=("$1")
             shift
             ;;

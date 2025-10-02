@@ -3,15 +3,20 @@ set -e
 
 # Parse command line arguments
 USE_AVX512=false
+DISABLE_TIMEOUT=false
 while [[ $# -gt 0 ]]; do
     case $1 in
         --avx512)
             USE_AVX512=true
             shift
             ;;
+        --no-timeout)
+            DISABLE_TIMEOUT=true
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--avx512]"
+            echo "Usage: $0 [--avx512] [--no-timeout]"
             exit 1
             ;;
     esac
@@ -91,7 +96,9 @@ MORELLO_HASH=$(
     jq -r '.commit.sha')
 declare -r MORELLO_HASH
 
-echo "max_work_time = 10800"  # 3 hours in seconds
+if [ "$DISABLE_TIMEOUT" != true ]; then
+    echo "max_work_time = 10800"  # 3 hours in seconds
+fi
 echo "order = \"random-new-first\""
 echo ""
 
