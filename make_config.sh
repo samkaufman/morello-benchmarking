@@ -179,9 +179,9 @@ for n in "${sizes[@]}"; do
     echo "docker_path = \"./morello\""
     echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"--avx512\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
-        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_matmul_x86_parameterized_example.sh\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     fi
     echo ""
 
