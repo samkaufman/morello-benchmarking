@@ -1,5 +1,5 @@
 use morello::codegen::CodeGen;
-use morello::common::{DimSize, Shape};
+use morello::common::{DimSize, Dtype, Shape};
 use morello::db::FilesDatabase;
 use morello::grid::canon::CanonicalBimap;
 use morello::grid::general::BiMap;
@@ -14,6 +14,7 @@ use morello::target::{
     CpuMemoryLevel::{GL, L1, VRF},
     CpuTarget, Target,
 };
+use morello::target::{CpuMemoryLevel, MemoryLevel};
 use morello::utils::ToWriteFmt;
 use morello::{shape, spec};
 use nonzero::nonzero as nz;
@@ -55,9 +56,9 @@ fn main() {
     let db = FilesDatabase::new(db_path_ref, true, 1, 10_000, 1);
 
     if use_avx512 {
-        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(16u32), nz!(48u32), nz!(8u32), db);
+        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(48u32), nz!(8u32), db);
     } else {
-        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(8u32), nz!(16u32), nz!(4u32), db);
+        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(16u32), nz!(4u32), db);
     }
 }
 
@@ -66,7 +67,6 @@ fn main_per_target<Tgt>(
     m: u32,
     k: u32,
     n: u32,
-    vec_size: DimSize,
     v_n_size: DimSize,
     mr: DimSize,
     db: FilesDatabase,
@@ -85,7 +85,7 @@ fn main_per_target<Tgt>(
     spec.canonicalize().unwrap();
 
     let implementation = spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| {
-        schedule_matmul_serial(s, m, n, vec_size, v_n_size, mr)
+        schedule_matmul_serial(s, m, n, v_n_size, mr)
     });
     let implementation = apply_rewrites(implementation);
     let implementation = implementation.synthesize_all(&db);
@@ -124,10 +124,20 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
     spec_app: &ImplNode<Tgt>,
     m: u32,
     n: u32,
-    vec_size: DimSize,
     v_n_size: DimSize,
     mr: DimSize,
 ) -> ImplNode<Tgt> {
+    // vec_size is largest register name divided by size of f32
+    let vec_size = DimSize::try_from(
+        *Tgt::Level::from(CpuMemoryLevel::VRF)
+            .vector_bytes()
+            .iter()
+            .max()
+            .unwrap()
+            / Dtype::Float32.size() as u32,
+    )
+    .unwrap();
+
     spec_app.tile_out_ensure_continue(&[1, (m / mr.get()) * mr.get(), n], |a| {
         // layout_a packs the M dimension up to size `mr`. (If smaller than `mr`, layout_a will
         // just be canonicalized to batched column-major.)
