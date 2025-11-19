@@ -52,13 +52,10 @@ fn main() {
         process::exit(2);
     };
 
-    let db_path_ref = db_path.as_deref().map(std::path::Path::new);
-    let db = FilesDatabase::new(db_path_ref, true, 1, 10_000, 1);
-
     if use_avx512 {
-        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(48u32), nz!(8u32), db);
+        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(48u32), nz!(8u32), db_path);
     } else {
-        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(16u32), nz!(4u32), db);
+        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(16u32), nz!(4u32), db_path);
     }
 }
 
@@ -69,12 +66,15 @@ fn main_per_target<Tgt>(
     n: u32,
     v_n_size: DimSize,
     mr: DimSize,
-    db: FilesDatabase,
+    db_path: Option<String>,
 ) where
     Tgt: CpuTarget,
     Tgt::Level: CanonicalBimap,
     <Tgt::Level as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
 {
+    let db_path_ref = db_path.as_deref().map(std::path::Path::new);
+    let db = FilesDatabase::new::<Tgt>(db_path_ref, true, 1, 10_000, 1);
+
     let mut spec: Spec<Tgt> = spec!(MatmulAccum(
         [batch_size, m, k, n],
         (f32, GL, row_major),
