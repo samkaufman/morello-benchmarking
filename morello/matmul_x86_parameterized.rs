@@ -190,7 +190,7 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
                                                     .find(|&s| spec_i.0.parameter_shape(1)[2] >= s)
                                                     .unwrap();
                                                 let v = vec_size.min(width);
-                                                j.move_vrf(2, VRF, v).split(1)
+                                                j.move_vrf(2, VRF, v.get()).split(1)
                                             }
                                         },
                                     )
