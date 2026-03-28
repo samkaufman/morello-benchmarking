@@ -33,6 +33,9 @@ declare -a SMALL_PARALLEL_FACTORS=(1 "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORE
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 declare -a power_of_two_sizes=(64 128 256 512 1024)
+declare -a softmax_batch_sizes=(1 2 4 8 16 32 64 128 256)
+declare -a softmax_lengths=(64 128 256 512 1024 2048 4096)
+mapfile -t softmax_num_cores < <(printf "%s\n" 1 "$(( PHYSICAL_CORES / 4 ))" "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORES" | sort -un)
 
 # Function to calculate GFLOPS for f32 matrix multiplication
 # Formula: 2 * M * K * N / 1,000,000,000
@@ -43,6 +46,17 @@ calculate_gflops() {
     local n=$4
     local gflops_value=$(echo "scale=6; 2 * $b * $m * $k * $n / 1000000000" | bc -l)
     # Ensure proper decimal format (add leading 0 if missing)
+    if [[ $gflops_value == .* ]]; then
+        gflops_value="0$gflops_value"
+    fi
+    echo "$gflops_value"
+}
+
+# Approximate softmax work as max + subtract + exp + add + divide per element.
+calculate_softmax_gflops() {
+    local b=$1
+    local length=$2
+    local gflops_value=$(echo "scale=9; 5 * $b * $length / 1000000000" | bc -l)
     if [[ $gflops_value == .* ]]; then
         gflops_value="0$gflops_value"
     fi
@@ -134,6 +148,27 @@ echo "backend_name = \"gemma.cpp\""
 echo "docker_path = \"./gemma.cpp/decode\""
 echo "command = []"
 echo ""
+
+for batch_size in "${softmax_batch_sizes[@]}"; do
+for length in "${softmax_lengths[@]}"; do
+for num_cores in "${softmax_num_cores[@]}"; do
+    if [ "$batch_size" -lt "$num_cores" ]; then
+        continue
+    fi
+    echo '[[jobs]]'
+    echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
+    echo "size = $length"
+    echo "batch_size = $batch_size"
+    gflops_value=$(calculate_softmax_gflops "$batch_size" "$length")
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "xnnpack"'
+    echo 'docker_path = "./xnnpack"'
+    echo "command = [ \"f32\", \"$batch_size\", \"$length\", \"$num_cores\" ]"
+    echo "num_cores = $num_cores"
+    echo ""
+done
+done
+done
 
 for i in "${matmul_oneoff_sizes[@]}"; do
 echo '[[jobs]]'
