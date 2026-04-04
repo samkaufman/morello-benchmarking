@@ -9,6 +9,7 @@
 
 __attribute__((noinline))
 void kernel(xnn_operator_t softmax_op, pthreadpool_t threadpool) {
+    // ultimately calls xnn_compute_floating_point_softmax in XNNPACK
     if (xnn_run_operator(softmax_op, threadpool) != xnn_status_success) {
         std::cerr << "xnn_run_operator failed" << std::endl;
         exit(1);
