@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
-binary_path=$(target/release/examples/matmul_x86_parameterized "$@" | tail -n1)
+if [ "$#" -lt 1 ]; then
+    echo "Usage: $0 <example_name> [example args...]" >&2
+    exit 2
+fi
+
+example_name="$1"
+shift
+
+binary_path=$(target/release/examples/"$example_name" "$@" | tail -n1)
 if [ ! -f "$binary_path" ]; then
     echo "Error: Binary not found at $binary_path" >&2
     exit 1

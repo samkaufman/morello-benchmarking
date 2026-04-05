@@ -27,11 +27,12 @@ RUN git clone https://github.com/samkaufman/morello.git
 WORKDIR /morello
 RUN git checkout $MORELLO_VERSION && \
     git submodule update --init --recursive
-RUN sed -i 's/^fn apply_to_leaf_spec/pub fn apply_to_leaf_spec/' morello/src/scheduling_sugar.rs
-RUN cargo build --release --no-default-features
+RUN sed -i 's/^fn apply_to_leaf_spec/pub fn apply_to_leaf_spec/' morello/src/scheduling_sugar.rs && \
+    cargo build --release --no-default-features
 
-COPY ./matmul_x86_parameterized.rs morello/examples/
+COPY ./matmul_x86_parameterized.rs ./softmax_3pass_synth.rs morello/examples/
 
-RUN cargo build --release --no-default-features --example matmul_x86_parameterized
+RUN cargo build --release --no-default-features --example matmul_x86_parameterized && \
+    cargo build --release --no-default-features --example softmax_3pass_synth
 ENV CLANG=/usr/bin/clang-18
-COPY ./run_bench.sh ./run_matmul_x86_parameterized_example.sh /
+COPY ./run_bench.sh ./run_morello_example.sh /

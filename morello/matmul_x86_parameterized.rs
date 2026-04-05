@@ -11,10 +11,10 @@ use morello::scheduling_sugar::SchedulingSugar;
 use morello::spec::{LogicalSpec, PrimitiveBasics, PrimitiveSpecType, Spec};
 use morello::target::{
     Avx2Target, Avx512Target,
-    CpuMemoryLevel::{GL, L1, VRF},
+    CpuMemory::{GL, L1, VRF},
     CpuTarget, Target,
 };
-use morello::target::{CpuMemoryLevel, MemoryLevel};
+use morello::target::Memory;
 use morello::utils::ToWriteFmt;
 use morello::{shape, spec};
 use nonzero::nonzero as nz;
@@ -69,8 +69,8 @@ fn main_per_target<Tgt>(
     db_path: Option<String>,
 ) where
     Tgt: CpuTarget,
-    Tgt::Level: CanonicalBimap,
-    <Tgt::Level as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
+    Tgt::Memory: CanonicalBimap,
+    <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
 {
     let db_path_ref = db_path.as_deref().map(std::path::Path::new);
     let db = FilesDatabase::new::<Tgt>(db_path_ref, true, 1, 10_000, 1);
@@ -129,7 +129,7 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
 ) -> ImplNode<Tgt> {
     // vec_size is largest register name divided by size of f32
     let vec_size = DimSize::try_from(
-        *Tgt::Level::from(CpuMemoryLevel::VRF)
+        *Tgt::Memory::from(VRF)
             .vector_bytes()
             .iter()
             .max()
@@ -237,7 +237,7 @@ fn apply_rewrites<Tgt: CpuTarget>(implementation: ImplNode<Tgt>) -> ImplNode<Tgt
             changed = true;
         }
         for idx in [0u8, 1] {
-            if spec.0.parameter_level(idx.into()) == GL {
+            if spec.0.parameter_memory(idx.into()) == GL {
                 new_impl = new_impl.move_param(idx, L1);
                 changed = true;
             }
