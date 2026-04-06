@@ -1,1 +1,2 @@
 *.deb
+torch/__pycache__/

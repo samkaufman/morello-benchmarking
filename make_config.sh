@@ -166,6 +166,17 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo "command = [ \"f32\", \"$batch_size\", \"$length\", \"$num_cores\" ]"
     echo "num_cores = $num_cores"
     echo ""
+
+    echo '[[jobs]]'
+    echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
+    echo "size = $length"
+    echo "batch_size = $batch_size"
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "torch"'
+    echo 'docker_path = "./torch"'
+    echo "command = [ \"softmax-f32\", \"$batch_size\", \"$length\", \"$num_cores\" ]"
+    echo "num_cores = $num_cores"
+    echo ""
 done
 
 echo '[[jobs]]'
@@ -320,7 +331,7 @@ echo "size = $i"
 echo 'batch_size = 1'
 echo 'backend_name = "torch"'
 echo 'docker_path = "./torch"'
-echo "command = [ \"$i\" ]"
+echo "command = [ \"matmul2-f32\", \"$i\" ]"
 echo ""
 done
 
