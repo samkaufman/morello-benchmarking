@@ -1,6 +1,8 @@
 use morello::codegen::CodeGen;
 use morello::common::Dtype;
 use morello::db::FilesDatabase;
+use morello::grid::canon::CanonicalBimap;
+use morello::grid::general::BiMap;
 use morello::layout::row_major;
 use morello::pprint::{pprint, ImplPrintStyle};
 use morello::scheduling_sugar::{SchedulingSugar, Subschedule};
@@ -8,9 +10,9 @@ use morello::shape;
 use morello::spec::{LogicalSpec, PrimitiveBasics, PrimitiveSpecType, Spec};
 use morello::target::CpuKernel;
 use morello::target::{
-    Avx2Target,
+    Avx2Target, Avx512Target,
     CpuMemory::{self, L1, RF},
-    Target,
+    CpuTarget,
 };
 use morello::tensorspec::TensorSpecAux;
 use morello::utils::ToWriteFmt;
@@ -29,10 +31,11 @@ struct Args {
     batch_size: NonZeroU32,
     seq_len: NonZeroU32,
     parallel: bool,
+    avx512: bool,
 }
 
 fn usage(program_name: &str) -> String {
-    format!("Usage: {program_name} [--db <path>] [--parallel] <batch_size> <seq_len>")
+    format!("Usage: {program_name} [--db <path>] [--parallel] [--avx512] <batch_size> <seq_len>")
 }
 
 fn parse_args() -> Args {
@@ -42,12 +45,17 @@ fn parse_args() -> Args {
         .unwrap_or_else(|| String::from("softmax_3pass_synth"));
 
     let mut parallel = false;
+    let mut avx512 = false;
     let mut integer_args = vec![];
     let mut db = None;
 
     while let Some(arg) = args_iter.next() {
         if arg == "--parallel" {
             parallel = true;
+            continue;
+        }
+        if arg == "--avx512" {
+            avx512 = true;
             continue;
         }
         if arg == "--db" {
@@ -89,13 +97,28 @@ fn parse_args() -> Args {
         batch_size,
         seq_len,
         parallel,
+        avx512,
     }
 }
 
 fn main() {
     let args = parse_args();
 
-    let db = FilesDatabase::new::<Avx2Target>(args.db.as_deref(), true, 1, 10_000, 1);
+    if args.avx512 {
+        main_per_target::<Avx512Target>(args);
+    } else {
+        main_per_target::<Avx2Target>(args);
+    }
+}
+
+fn main_per_target<Tgt>(args: Args)
+where
+    Tgt: CpuTarget,
+    Tgt::Memory: CanonicalBimap + From<CpuMemory>,
+    <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
+    Tgt::Kernel: From<CpuKernel>,
+{
+    let db = FilesDatabase::new::<Tgt>(args.db.as_deref(), true, 1, 10_000, 1);
 
     let shape = shape![args.batch_size, args.seq_len];
     let batch_size = shape[0].get();
@@ -108,7 +131,7 @@ fn main() {
         },
         vec![
             TensorSpecAux {
-                memory: CpuMemory::GL,
+                memory: CpuMemory::GL.into(),
                 layout: row_major(&shape),
                 vector_size: None,
             };
@@ -116,7 +139,7 @@ fn main() {
         ],
         !args.parallel,
     );
-    let spec = Spec::<Avx2Target>(logical_spec, Avx2Target::max_mem());
+    let spec = Spec::<Tgt>(logical_spec, Tgt::max_mem());
     println!("Logical Spec: {}", spec.0);
 
     // Tile across the batch dimension. (We cannot tile across the scan dimension.)
@@ -132,8 +155,8 @@ fn main() {
         };
         tiled.to_softmax_parts(RF, row_major, None, L1, row_major, None)
     }
-        .subschedule(&[1], |dvs| dvs.select(CpuKernel::DivideVecScalarReciprocal))
-        .synthesize_all(&db);
+    .subschedule(&[1], |dvs| dvs.select(CpuKernel::DivideVecScalarReciprocal))
+    .synthesize_all(&db);
 
     println!("\nImpl resulting from manual scheduling:");
     pprint(&implementation, ImplPrintStyle::Compact);

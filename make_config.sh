@@ -187,7 +187,11 @@ echo "gflops = $gflops_value"
 echo 'backend_name = "morello"'
 echo 'docker_path = "./morello"'
 echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$length\" ]"
+if [ "$USE_AVX512" = true ]; then
+    echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", \"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$length\" ]"
+else
+    echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$length\" ]"
+fi
 echo "num_cores = 1"
 echo ""
 done
