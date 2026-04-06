@@ -177,23 +177,28 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo "command = [ \"softmax-f32\", \"$batch_size\", \"$length\", \"$num_cores\" ]"
     echo "num_cores = $num_cores"
     echo ""
-done
 
-echo '[[jobs]]'
-echo "name = \"softmax-f32-${batch_size}x${length}-cores1\""
-echo "size = $length"
-echo "batch_size = $batch_size"
-echo "gflops = $gflops_value"
-echo 'backend_name = "morello"'
-echo 'docker_path = "./morello"'
-echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-if [ "$USE_AVX512" = true ]; then
-    echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", \"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$length\" ]"
-else
-    echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$length\" ]"
-fi
-echo "num_cores = 1"
-echo ""
+    echo '[[jobs]]'
+    echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
+    echo "size = $length"
+    echo "batch_size = $batch_size"
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "morello"'
+    echo 'docker_path = "./morello"'
+    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    if [ "$num_cores" -gt 1 ]; then
+        parallel_args='"--parallel", '
+    else
+        parallel_args=''
+    fi
+    if [ "$USE_AVX512" = true ]; then
+        echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", ${parallel_args}\"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$length\" ]"
+    else
+        echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", ${parallel_args}\"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$length\" ]"
+    fi
+    echo "num_cores = $num_cores"
+    echo ""
+done
 done
 done
 
