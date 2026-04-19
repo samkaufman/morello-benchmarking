@@ -44,7 +44,8 @@ calculate_gflops() {
     local m=$2
     local k=$3
     local n=$4
-    local gflops_value=$(echo "scale=6; 2 * $b * $m * $k * $n / 1000000000" | bc -l)
+    local gflops_value
+    gflops_value=$(echo "scale=6; 2 * $b * $m * $k * $n / 1000000000" | bc -l)
     # Ensure proper decimal format (add leading 0 if missing)
     if [[ $gflops_value == .* ]]; then
         gflops_value="0$gflops_value"
@@ -56,7 +57,8 @@ calculate_gflops() {
 calculate_softmax_gflops() {
     local b=$1
     local length=$2
-    local gflops_value=$(echo "scale=9; 5 * $b * $length / 1000000000" | bc -l)
+    local gflops_value
+    gflops_value=$(echo "scale=9; 5 * $b * $length / 1000000000" | bc -l)
     if [[ $gflops_value == .* ]]; then
         gflops_value="0$gflops_value"
     fi
