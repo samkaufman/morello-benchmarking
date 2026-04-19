@@ -31,6 +31,21 @@ fn main() {
     let mut db_path: Option<String> = None;
 
     let mut args_iter = env::args().skip(1);
+    let Some(dtype_arg) = args_iter.next() else {
+        eprintln!(
+            "Usage: matmul_x86_parameterized <f32|i32> [--avx512] [--db <path>] <batch_size> <m> <k> <n>"
+        );
+        process::exit(2);
+    };
+    let dtype = match dtype_arg.as_str() {
+        "f32" => Dtype::Float32,
+        "i32" => Dtype::Sint32,
+        _ => {
+            eprintln!("Invalid dtype '{}'. Expected 'f32' or 'i32'.", dtype_arg);
+            process::exit(2);
+        }
+    };
+
     while let Some(arg) = args_iter.next() {
         if arg == "--avx512" {
             use_avx512 = true;
@@ -52,10 +67,35 @@ fn main() {
         process::exit(2);
     };
 
+    let (avx2_v_n_size, avx512_v_n_size) = match dtype {
+        Dtype::Float32 => (nz!(16u32), nz!(48u32)),
+        // i32 currently needs a conservative packed-N width for correctness.
+        Dtype::Sint32 => (nz!(4u32), nz!(4u32)),
+        _ => unreachable!("dtype parsing should restrict to f32/i32"),
+    };
+
     if use_avx512 {
-        main_per_target::<Avx512Target>(batch_size, m, k, n, nz!(48u32), nz!(8u32), db_path);
+        main_per_target::<Avx512Target>(
+            batch_size,
+            m,
+            k,
+            n,
+            avx512_v_n_size,
+            nz!(8u32),
+            db_path,
+            dtype,
+        );
     } else {
-        main_per_target::<Avx2Target>(batch_size, m, k, n, nz!(16u32), nz!(4u32), db_path);
+        main_per_target::<Avx2Target>(
+            batch_size,
+            m,
+            k,
+            n,
+            avx2_v_n_size,
+            nz!(4u32),
+            db_path,
+            dtype,
+        );
     }
 }
 
@@ -67,6 +107,7 @@ fn main_per_target<Tgt>(
     v_n_size: DimSize,
     mr: DimSize,
     db_path: Option<String>,
+    dtype: Dtype,
 ) where
     Tgt: CpuTarget,
     Tgt::Memory: CanonicalBimap,
@@ -75,12 +116,21 @@ fn main_per_target<Tgt>(
     let db_path_ref = db_path.as_deref().map(std::path::Path::new);
     let db = FilesDatabase::new::<Tgt>(db_path_ref, true, 1, 10_000, 1);
 
-    let mut spec: Spec<Tgt> = spec!(MatmulAccum(
-        [batch_size, m, k, n],
-        (f32, GL, row_major),
-        (f32, GL, row_major),
-        (f32, GL, row_major)
-    ));
+    let mut spec: Spec<Tgt> = match dtype {
+        Dtype::Float32 => spec!(MatmulAccum(
+            [batch_size, m, k, n],
+            (f32, GL, row_major),
+            (f32, GL, row_major),
+            (f32, GL, row_major)
+        )),
+        Dtype::Sint32 => spec!(MatmulAccum(
+            [batch_size, m, k, n],
+            (i32, GL, row_major),
+            (i32, GL, row_major),
+            (i32, GL, row_major)
+        )),
+        _ => unreachable!("dtype parsing should restrict to f32/i32"),
+    };
     spec.0.set_serial_only(batch_size == 1);
     spec.canonicalize().unwrap();
 
@@ -127,14 +177,14 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
     v_n_size: DimSize,
     mr: DimSize,
 ) -> ImplNode<Tgt> {
-    // vec_size is largest register name divided by size of f32
+    // vec_size is largest register width divided by i32/f32 element size (4 bytes).
     let vec_size = DimSize::try_from(
         *Tgt::Memory::from(VRF)
             .vector_bytes()
             .iter()
             .max()
             .unwrap()
-            / Dtype::Float32.size() as u32,
+            / 4,
     )
     .unwrap();
 
