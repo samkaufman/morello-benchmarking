@@ -1,5 +1,5 @@
 use morello::codegen::CodeGen;
-use morello::common::{DimSize, Dtype, Shape};
+use morello::common::{DimSize, Shape};
 use morello::db::FilesDatabase;
 use morello::grid::canon::CanonicalBimap;
 use morello::grid::general::BiMap;
@@ -9,12 +9,12 @@ use morello::layout::row_major;
 use morello::pprint::ImplPrintStyle;
 use morello::scheduling_sugar::SchedulingSugar;
 use morello::spec::{LogicalSpec, PrimitiveBasics, PrimitiveSpecType, Spec};
+use morello::target::Memory;
 use morello::target::{
     Avx2Target, Avx512Target,
     CpuMemory::{GL, L1, VRF},
     CpuTarget, Target,
 };
-use morello::target::Memory;
 use morello::utils::ToWriteFmt;
 use morello::{shape, spec};
 use nonzero::nonzero as nz;
@@ -25,27 +25,20 @@ const MC: u32 = 528;
 const KC: u32 = 528;
 const NC: u32 = 1056;
 
+#[derive(Clone, Copy)]
+enum MatmulKind {
+    F32,
+    I32,
+    BF16F32,
+}
+
 fn main() {
     let mut use_avx512 = false;
     let mut integer_args = vec![];
     let mut db_path: Option<String> = None;
+    let mut kind: Option<MatmulKind> = None;
 
     let mut args_iter = env::args().skip(1);
-    let Some(dtype_arg) = args_iter.next() else {
-        eprintln!(
-            "Usage: matmul_x86_parameterized <f32|i32> [--avx512] [--db <path>] <batch_size> <m> <k> <n>"
-        );
-        process::exit(2);
-    };
-    let dtype = match dtype_arg.as_str() {
-        "f32" => Dtype::Float32,
-        "i32" => Dtype::Sint32,
-        _ => {
-            eprintln!("Invalid dtype '{}'. Expected 'f32' or 'i32'.", dtype_arg);
-            process::exit(2);
-        }
-    };
-
     while let Some(arg) = args_iter.next() {
         if arg == "--avx512" {
             use_avx512 = true;
@@ -56,22 +49,39 @@ fn main() {
                 panic!("--db flag requires a path argument");
             }
             continue;
+        } else if arg == "f32" {
+            if kind.replace(MatmulKind::F32).is_some() {
+                panic!("dtype specified multiple times");
+            }
+        } else if arg == "i32" {
+            if kind.replace(MatmulKind::I32).is_some() {
+                panic!("dtype specified multiple times");
+            }
+        } else if arg == "bf16f32" {
+            if kind.replace(MatmulKind::BF16F32).is_some() {
+                panic!("dtype specified multiple times");
+            }
         } else if let Ok(v) = arg.parse::<u32>() {
             integer_args.push(v);
         } else {
             panic!("Unrecognized argument: {}", arg);
         }
     }
+
+    let Some(kind) = kind else {
+        eprint_usage_message();
+        process::exit(2);
+    };
     let [batch_size, m, k, n] = integer_args[..] else {
-        eprintln!("incorrect arguments");
+        eprint_usage_message();
         process::exit(2);
     };
 
-    let (avx2_v_n_size, avx512_v_n_size) = match dtype {
-        Dtype::Float32 => (nz!(16u32), nz!(48u32)),
-        // i32 currently needs a conservative packed-N width for correctness.
-        Dtype::Sint32 => (nz!(4u32), nz!(4u32)),
-        _ => unreachable!("dtype parsing should restrict to f32/i32"),
+    let (avx2_v_n_size, avx512_v_n_size) = match kind {
+        MatmulKind::F32 => (nz!(16u32), nz!(48u32)),
+        MatmulKind::BF16F32 => (nz!(8u32), nz!(48u32)),
+        // Int32-output modes currently need a conservative packed-N width for correctness.
+        MatmulKind::I32 => (nz!(4u32), nz!(4u32)),
     };
 
     if use_avx512 {
@@ -83,22 +93,14 @@ fn main() {
             avx512_v_n_size,
             nz!(8u32),
             db_path,
-            dtype,
+            kind,
         );
     } else {
-        main_per_target::<Avx2Target>(
-            batch_size,
-            m,
-            k,
-            n,
-            avx2_v_n_size,
-            nz!(4u32),
-            db_path,
-            dtype,
-        );
+        main_per_target::<Avx2Target>(batch_size, m, k, n, avx2_v_n_size, nz!(4u32), db_path, kind);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn main_per_target<Tgt>(
     batch_size: u32,
     m: u32,
@@ -107,7 +109,7 @@ fn main_per_target<Tgt>(
     v_n_size: DimSize,
     mr: DimSize,
     db_path: Option<String>,
-    dtype: Dtype,
+    kind: MatmulKind,
 ) where
     Tgt: CpuTarget,
     Tgt::Memory: CanonicalBimap,
@@ -116,20 +118,25 @@ fn main_per_target<Tgt>(
     let db_path_ref = db_path.as_deref().map(std::path::Path::new);
     let db = FilesDatabase::new::<Tgt>(db_path_ref, true, 1, 10_000, 1);
 
-    let mut spec: Spec<Tgt> = match dtype {
-        Dtype::Float32 => spec!(MatmulAccum(
+    let mut spec: Spec<Tgt> = match kind {
+        MatmulKind::F32 => spec!(MatmulAccum(
             [batch_size, m, k, n],
             (f32, GL, row_major),
             (f32, GL, row_major),
             (f32, GL, row_major)
         )),
-        Dtype::Sint32 => spec!(MatmulAccum(
+        MatmulKind::I32 => spec!(MatmulAccum(
             [batch_size, m, k, n],
             (i32, GL, row_major),
             (i32, GL, row_major),
             (i32, GL, row_major)
         )),
-        _ => unreachable!("dtype parsing should restrict to f32/i32"),
+        MatmulKind::BF16F32 => spec!(MatmulAccum(
+            [batch_size, m, k, n],
+            (bf16, GL, row_major),
+            (bf16, GL, row_major),
+            (f32, GL, row_major)
+        )),
     };
     spec.0.set_serial_only(batch_size == 1);
     spec.canonicalize().unwrap();
@@ -170,6 +177,12 @@ fn main_per_target<Tgt>(
     println!("{}", build_result.binary_path().display());
 }
 
+fn eprint_usage_message() {
+    eprintln!(
+            "Usage: matmul_x86_parameterized [--avx512] [--db <path>] <f32|i32|bf16f32> <batch_size> <m> <k> <n>"
+        );
+}
+
 fn schedule_matmul_serial<Tgt: CpuTarget>(
     spec_app: &ImplNode<Tgt>,
     m: u32,
@@ -177,16 +190,10 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
     v_n_size: DimSize,
     mr: DimSize,
 ) -> ImplNode<Tgt> {
-    // vec_size is largest register width divided by i32/f32 element size (4 bytes).
-    let vec_size = DimSize::try_from(
-        *Tgt::Memory::from(VRF)
-            .vector_bytes()
-            .iter()
-            .max()
-            .unwrap()
-            / 4,
-    )
-    .unwrap();
+    // vec_size is largest register width divided by the 4-byte output element size.
+    let vec_size =
+        DimSize::try_from(*Tgt::Memory::from(VRF).vector_bytes().iter().max().unwrap() / 4)
+            .unwrap();
 
     spec_app.tile_out_ensure_continue(&[1, (m / mr.get()) * mr.get(), n], |a| {
         // layout_a packs the M dimension up to size `mr`. (If smaller than `mr`, layout_a will
