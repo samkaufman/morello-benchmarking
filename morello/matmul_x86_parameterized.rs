@@ -1,6 +1,6 @@
 use morello::codegen::CodeGen;
-use morello::common::{DimSize, Shape};
-use morello::db::FilesDatabase;
+use morello::common::{DimSize, Dtype, Shape};
+use morello::db::{FilesDatabase, TileScale};
 use morello::grid::canon::CanonicalBimap;
 use morello::grid::general::BiMap;
 use morello::imp::{subspecs::SpecApp, Impl, ImplNode};
@@ -11,8 +11,8 @@ use morello::scheduling_sugar::SchedulingSugar;
 use morello::spec::{LogicalSpec, PrimitiveBasics, PrimitiveSpecType, Spec};
 use morello::target::Memory;
 use morello::target::{
-    Avx2Target, Avx512Target,
-    CpuMemory::{GL, L1, VRF},
+    Avx2Target, Avx512Kernel, Avx512Target, CpuKernel,
+    CpuMemory::{GL, L1, RF, VRF},
     CpuTarget, Target,
 };
 use morello::utils::ToWriteFmt;
@@ -24,6 +24,7 @@ use std::{env, fmt::Debug, io, process};
 const MC: u32 = 528;
 const KC: u32 = 528;
 const NC: u32 = 1056;
+const AVX512_BF16_L1_KC: u32 = 256;
 
 #[derive(Clone, Copy)]
 enum MatmulKind {
@@ -111,12 +112,42 @@ fn main_per_target<Tgt>(
     db_path: Option<String>,
     kind: MatmulKind,
 ) where
-    Tgt: CpuTarget,
+    Tgt: Bf16InnerSchedule,
     Tgt::Memory: CanonicalBimap,
     <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
 {
+    main_per_target_with_schedule::<Tgt, _>(
+        batch_size,
+        m,
+        k,
+        n,
+        v_n_size,
+        mr,
+        db_path,
+        kind,
+        schedule_matmul_serial::<Tgt>,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn main_per_target_with_schedule<Tgt, F>(
+    batch_size: u32,
+    m: u32,
+    k: u32,
+    n: u32,
+    v_n_size: DimSize,
+    mr: DimSize,
+    db_path: Option<String>,
+    kind: MatmulKind,
+    schedule_fn: F,
+) where
+    Tgt: Bf16InnerSchedule,
+    Tgt::Memory: CanonicalBimap,
+    <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
+    F: Fn(&ImplNode<Tgt>, u32, u32, DimSize, DimSize) -> ImplNode<Tgt>,
+{
     let db_path_ref = db_path.as_deref().map(std::path::Path::new);
-    let db = FilesDatabase::new::<Tgt>(db_path_ref, true, 1, 10_000, 1);
+    let db = FilesDatabase::new::<Tgt>(db_path_ref, TileScale::Linear, 1, 30_000, 1);
 
     let mut spec: Spec<Tgt> = match kind {
         MatmulKind::F32 => spec!(MatmulAccum(
@@ -141,11 +172,11 @@ fn main_per_target<Tgt>(
     spec.0.set_serial_only(batch_size == 1);
     spec.canonicalize().unwrap();
 
-    let implementation = spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| {
-        schedule_matmul_serial(s, m, n, v_n_size, mr)
-    });
+    let implementation =
+        spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| schedule_fn(s, m, n, v_n_size, mr));
     let implementation = apply_rewrites(implementation);
     let implementation = implementation.synthesize_all(&db);
+    drop(db); // spill to disk here
     implementation
         .emit(
             false,
@@ -179,11 +210,11 @@ fn main_per_target<Tgt>(
 
 fn eprint_usage_message() {
     eprintln!(
-            "Usage: matmul_x86_parameterized [--avx512] [--db <path>] <f32|i32|bf16f32> <batch_size> <m> <k> <n>"
-        );
+        "Usage: matmul_x86_parameterized [--avx512] [--db <path>] <f32|i32|bf16f32> <batch_size> <m> <k> <n>"
+    );
 }
 
-fn schedule_matmul_serial<Tgt: CpuTarget>(
+fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
     spec_app: &ImplNode<Tgt>,
     m: u32,
     n: u32,
@@ -202,7 +233,13 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
             unreachable!();
         };
         let m_inner = spec_a.0.parameter_shape(0)[1].min(mr);
-        let layout_a = layout![0, 1, 2, 1 p(m_inner)];
+        let layout_a = if is_bf16f32_matmul(spec_a)
+            && spec_a.0.parameter_shape(0)[2].get().is_multiple_of(2)
+        {
+            layout![0, 1, 2, 1 p(m_inner), 2 p(2)]
+        } else {
+            layout![0, 1, 2, 1 p(m_inner)]
+        };
 
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
             b.split_saturating_ensure_continue(KC, |c| {
@@ -214,7 +251,13 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
                             unreachable!();
                         };
                         let n_inner = spec_d.0.parameter_shape(1)[2].min(v_n_size);
-                        let layout_b = layout![0, 2, 1, 2 p(n_inner)];
+                        let layout_b = if is_bf16f32_matmul(spec_d)
+                            && spec_d.0.parameter_shape(1)[1].get().is_multiple_of(2)
+                        {
+                            layout![0, 2, 1, 2 p(n_inner), 1 p(2)]
+                        } else {
+                            layout![0, 2, 1, 2 p(n_inner)]
+                        };
 
                         d.tile_out_ensure_continue(&[1, MC, NC], |e| {
                             let ImplNode::SpecApp(SpecApp(spec_e, ..)) = &e else {
@@ -238,16 +281,19 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
                                             let ImplNode::SpecApp(SpecApp(spec_i, ..)) = &i else {
                                                 unreachable!();
                                             };
-                                            let j = i.move_param(2, L1);
                                             if spec_i.0.parameter_shape(1)[2] < nz!(4u32) {
-                                                j.split(1)
+                                                i.split(1)
                                             } else {
                                                 let width = [v_n_size, nz!(8u32), nz!(4u32)]
                                                     .into_iter()
                                                     .find(|&s| spec_i.0.parameter_shape(1)[2] >= s)
                                                     .unwrap();
                                                 let v = vec_size.min(width);
-                                                j.move_vrf(2, VRF, v.get()).split(1)
+                                                if is_bf16f32_matmul(spec_i) {
+                                                    Tgt::schedule_bf16_inner_tile(i, v)
+                                                } else {
+                                                    i.move_param(2, L1).move_vrf(2, VRF, v.get())
+                                                }
                                             }
                                         },
                                     )
@@ -256,6 +302,96 @@ fn schedule_matmul_serial<Tgt: CpuTarget>(
                         })
                     })
             })
+        })
+    })
+}
+
+fn is_bf16f32_matmul<Tgt: CpuTarget>(spec: &Spec<Tgt>) -> bool {
+    matches!(
+        &spec.0,
+        LogicalSpec::Primitive(
+            PrimitiveBasics {
+                typ: PrimitiveSpecType::Matmul { accum: true },
+                ..
+            },
+            _,
+            _,
+        )
+    ) && spec.0.parameter(0).dtype() == Dtype::Bfloat16
+        && spec.0.parameter(1).dtype() == Dtype::Bfloat16
+        && spec.0.parameter(2).dtype() == Dtype::Float32
+}
+
+trait Bf16InnerSchedule: CpuTarget {
+    /// Applies the target-specific innermost BF16 matmul tiling before selecting a kernel.
+    ///
+    /// AVX2 keeps the scalar-K schedule. AVX512 splits K to a cache-sized leaf, moves
+    /// packed A/B slices to L1, and tiles the output to a small M block and up to two
+    /// 16-lane N vectors so the selected `VDPBF16PS` kernel has enough independent
+    /// accumulator chains for Zen 5 while still fitting in zmm registers.
+    fn schedule_bf16_inner_tile(matmul: &ImplNode<Self>, vector_width: DimSize) -> ImplNode<Self>;
+}
+
+impl Bf16InnerSchedule for Avx2Target {
+    fn schedule_bf16_inner_tile(matmul: &ImplNode<Self>, vector_width: DimSize) -> ImplNode<Self> {
+        schedule_bf16_scalar_k_tile(matmul, vector_width, CpuKernel::BroadcastVecMultAddBf16F32)
+    }
+}
+
+impl Bf16InnerSchedule for Avx512Target {
+    fn schedule_bf16_inner_tile(matmul: &ImplNode<Self>, vector_width: DimSize) -> ImplNode<Self> {
+        if vector_width < nz!(16u32) {
+            return schedule_bf16_scalar_k_tile(
+                matmul,
+                vector_width,
+                Avx512Kernel::Cpu(CpuKernel::BroadcastVecMultAddBf16F32),
+            );
+        }
+
+        let ImplNode::SpecApp(SpecApp(spec, ..)) = matmul else {
+            unreachable!();
+        };
+        let m_block = spec.0.parameter_shape(0)[1].min(nz!(6u32));
+        matmul.tile_out_ensure_continue(&[1, m_block.get(), vector_width.get() * 2], |m_tile| {
+            m_tile
+                .move_vrf(2, VRF, vector_width.get())
+                .split_saturating_ensure_continue(AVX512_BF16_L1_KC, |k_tile| {
+                    let ImplNode::SpecApp(SpecApp(spec, ..)) = k_tile else {
+                        unreachable!();
+                    };
+                    let mut scheduled = k_tile.clone();
+                    if spec.0.parameter(0).memory() != L1 {
+                        scheduled = scheduled.move_param(0, L1);
+                    }
+                    if spec.0.parameter(1).memory() != L1 {
+                        scheduled = scheduled.move_param(1, L1);
+                    }
+                    if spec.0.parameter_shape(0)[2].get().is_multiple_of(2) {
+                        scheduled.select(Avx512Kernel::MatmulLoopVdpbf16ps)
+                    } else {
+                        schedule_bf16_scalar_k_tile(
+                            &scheduled,
+                            vector_width,
+                            Avx512Kernel::Cpu(CpuKernel::BroadcastVecMultAddBf16F32),
+                        )
+                    }
+                })
+        })
+    }
+}
+
+fn schedule_bf16_scalar_k_tile<Tgt: CpuTarget>(
+    matmul: &ImplNode<Tgt>,
+    vector_width: DimSize,
+    kernel: impl Into<Tgt::Kernel> + Copy,
+) -> ImplNode<Tgt> {
+    matmul.tile_out_ensure_continue(&[1, 1, vector_width.get()], |m_tile| {
+        m_tile.split_saturating_ensure_continue(1, |k_tile| {
+            k_tile
+                .move_param(0, RF)
+                .move_vrf(1, VRF, vector_width.get())
+                .move_vrf(2, VRF, vector_width.get())
+                .select(kernel)
         })
     })
 }
