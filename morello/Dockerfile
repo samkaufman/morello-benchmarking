@@ -8,7 +8,7 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-ARG RUST_VERSION=1.88.0
+ARG RUST_VERSION=1.95.0
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain "$RUST_VERSION" -y
 ENV PATH=/root/.cargo/bin:$PATH
 
