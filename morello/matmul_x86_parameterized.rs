@@ -80,7 +80,7 @@ fn main() {
 
     let (avx2_v_n_size, avx512_v_n_size) = match kind {
         MatmulKind::F32 => (nz!(16u32), nz!(48u32)),
-        MatmulKind::BF16F32 => (nz!(8u32), nz!(48u32)),
+        MatmulKind::BF16F32 => (nz!(8u32), nz!(32u32)),
         // Int32-output modes currently need a conservative packed-N width for correctness.
         MatmulKind::I32 => (nz!(4u32), nz!(4u32)),
     };
@@ -271,6 +271,7 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                                 &e,
                                 &[
                                     shape![1, mc_tile_size, v_n_size.get()],
+                                    shape![1, mc_tile_size, 16],
                                     shape![1, mc_tile_size, 8],
                                     shape![1, mc_tile_size, 4],
                                 ],
@@ -284,10 +285,13 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                                             if spec_i.0.parameter_shape(1)[2] < nz!(4u32) {
                                                 i.split(1)
                                             } else {
-                                                let width = [v_n_size, nz!(8u32), nz!(4u32)]
-                                                    .into_iter()
-                                                    .find(|&s| spec_i.0.parameter_shape(1)[2] >= s)
-                                                    .unwrap();
+                                                let width =
+                                                    [v_n_size, nz!(16u32), nz!(8u32), nz!(4u32)]
+                                                        .into_iter()
+                                                        .find(|&s| {
+                                                            spec_i.0.parameter_shape(1)[2] >= s
+                                                        })
+                                                        .unwrap();
                                                 let v = vec_size.min(width);
                                                 if is_bf16f32_matmul(spec_i) {
                                                     Tgt::schedule_bf16_inner_tile(i, v)
