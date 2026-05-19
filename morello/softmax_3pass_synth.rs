@@ -1,6 +1,6 @@
 use morello::codegen::CodeGen;
 use morello::common::Dtype;
-use morello::db::FilesDatabase;
+use morello::db::{FilesDatabase, TileScale};
 use morello::grid::canon::CanonicalBimap;
 use morello::grid::general::BiMap;
 use morello::layout::row_major;
@@ -118,7 +118,7 @@ where
     <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
     Tgt::Kernel: From<CpuKernel>,
 {
-    let db = FilesDatabase::new::<Tgt>(args.db.as_deref(), true, 1, 10_000, 1);
+    let db = FilesDatabase::new::<Tgt>(args.db.as_deref(), TileScale::PowerOfTwo, 1, 10_000, 1);
 
     let shape = shape![args.batch_size, args.seq_len];
     let batch_size = shape[0].get();
