@@ -160,6 +160,28 @@ emit_mkl_bf16f32_baseline() {
     echo ""
 }
 
+# Args: batch m k n
+emit_aocl_bf16f32_baseline() {
+    local b="$1" m="$2" k="$3" n="$4"
+    local gflops_value
+    if [ "$USE_AVX512" != true ]; then
+        return
+    fi
+
+    gflops_value=$(calculate_gflops "$b" "$m" "$k" "$n")
+
+    echo '[[jobs]]'
+    echo "name = \"matmul-batch-parallel-bf16f32-${b}x${m}x${k}x${n}\""
+    echo "size = $n"
+    echo "batch_size = $b"
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "aocl-4.2"'
+    echo 'docker_path = "./aocl"'
+    echo "command = [ \"batch-parallel-bf16f32\", \"$b\", \"$m\", \"$k\", \"$n\" ]"
+    echo "num_cores = $b"
+    echo ""
+}
+
 echo '[[jobs]]'
 echo 'name = "gemma-decode-2b"'
 echo "size = 1"
@@ -303,6 +325,7 @@ for n in "${sizes[@]}"; do
     echo ""
 
     emit_mkl_bf16f32_baseline "$batch_size" "$n" "$n" "$n"
+    emit_aocl_bf16f32_baseline "$batch_size" "$n" "$n" "$n"
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x${n}x${n}x${n}\""
@@ -367,6 +390,7 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo ""
 
     emit_mkl_bf16f32_baseline "$batch_size" "2048" "2048" "2048"
+    emit_aocl_bf16f32_baseline "$batch_size" "2048" "2048" "2048"
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-u8s8s32-${batch_size}x2048x2048x2048\""

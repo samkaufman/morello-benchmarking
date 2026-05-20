@@ -6,9 +6,10 @@ usage() {
 Usage:
     $0 u8s8s16 <m> <k> <n>
     $0 batch-parallel-f32 <batch_size> <m> <k> <n>
+    $0 batch-parallel-bf16f32 <batch_size> <m> <k> <n>
 
 Args:
-    benchmark_type: u8s8s16 | batch-parallel-f32
+    benchmark_type: u8s8s16 | batch-parallel-f32 | batch-parallel-bf16f32
     batch_size: number of instances to run in parallel
     m,k,n: positive integer matrix dimensions
 EOF
@@ -27,6 +28,9 @@ case "$BENCH_TYPE" in
     batch-parallel-f32)
         [ $# -eq 4 ] || { echo "batch-parallel-f32 requires: <batch_size> <m> <k> <n>"; usage; exit 1; }
         BATCH_SIZE="$1"; M="$2"; K="$3"; N="$4" ;;
+    batch-parallel-bf16f32)
+        [ $# -eq 4 ] || { echo "batch-parallel-bf16f32 requires: <batch_size> <m> <k> <n>"; usage; exit 1; }
+        BATCH_SIZE="$1"; M="$2"; K="$3"; N="$4" ;;
     *)
         echo "Unknown benchmark type: $BENCH_TYPE"; usage; exit 1 ;;
 esac
@@ -40,6 +44,7 @@ COMMON_FLAGS="clang++-18 -std=c++17 -O3 -march=core-avx2 -DNDEBUG -I/opt/aocl/in
 
 case "$BENCH_TYPE" in
     batch-parallel-f32) $COMMON_FLAGS -o aocl_bench aocl_bench_f32.cpp ;;
+    batch-parallel-bf16f32) $COMMON_FLAGS -o aocl_bench aocl_bench_batch_parallel_bf16f32.cpp ;;
     u8s8s16) $COMMON_FLAGS -o aocl_bench aocl_bench_u8s8s16.cpp ;;
 esac
 
