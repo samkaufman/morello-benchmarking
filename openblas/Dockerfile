@@ -12,7 +12,7 @@ FROM base AS openblas_builder
 WORKDIR /build
 RUN curl -L https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.30/OpenBLAS-0.3.30.tar.gz | tar xz
 WORKDIR /build/OpenBLAS-0.3.30
-RUN make -j$(nproc) DYNAMIC_ARCH=1
+RUN make -j$(nproc) DYNAMIC_ARCH=1 BUILD_BFLOAT16=1
 RUN make install PREFIX=/opt/openblas
 
 FROM base
@@ -20,6 +20,6 @@ WORKDIR /app
 COPY --from=openblas_builder /opt/openblas /opt/openblas
 ENV LD_LIBRARY_PATH=/opt/openblas/lib
 ENV PKG_CONFIG_PATH=/opt/openblas/lib/pkgconfig
-COPY openblas_bench_f32.cpp openblas_bench_batch_parallel_f32.cpp build_and_run.sh ./
+COPY openblas_bench_f32.cpp openblas_bench_batch_parallel_f32.cpp openblas_bench_batch_parallel_bf16f32.cpp build_and_run.sh ./
 RUN chmod +x build_and_run.sh
 ENTRYPOINT ["/app/build_and_run.sh"]

@@ -3,9 +3,9 @@ set -e
 
 BENCH_TYPE="$1"
 
-if [ "$BENCH_TYPE" = "batch-parallel-f32" ]; then
+if [ "$BENCH_TYPE" = "batch-parallel-f32" ] || [ "$BENCH_TYPE" = "batch-parallel-bf16f32" ]; then
     if [ $# -lt 5 ]; then
-        echo "Error: batch-parallel-f32 requires 5 arguments: <batch_size> <m> <k> <n>"
+        echo "Error: $BENCH_TYPE requires 5 arguments: <batch_size> <m> <k> <n>"
         exit 1
     fi
     BATCH_SIZE="$2"
@@ -27,7 +27,7 @@ elif [ "$BENCH_TYPE" = "f32" ]; then
     N="$4"
 else
     echo "Error: Unknown benchmark type: $BENCH_TYPE"
-    echo "Supported types: f32, batch-parallel-f32"
+    echo "Supported types: f32, batch-parallel-f32, batch-parallel-bf16f32"
     exit 1
 fi
 
@@ -46,12 +46,17 @@ elif [ "$BENCH_TYPE" = "batch-parallel-f32" ]; then
         -I/opt/openblas/include \
         -L/opt/openblas/lib -lopenblas \
         -o openblas_bench openblas_bench_batch_parallel_f32.cpp
+elif [ "$BENCH_TYPE" = "batch-parallel-bf16f32" ]; then
+    clang++-18 -std=c++17 -O3 -march=core-avx2 -DNDEBUG -fopenmp \
+        -I/opt/openblas/include \
+        -L/opt/openblas/lib -lopenblas \
+        -o openblas_bench openblas_bench_batch_parallel_bf16f32.cpp
 else
     echo "Unknown benchmark type: $BENCH_TYPE"
     exit 1
 fi
 
-if [ "$BENCH_TYPE" = "batch-parallel-f32" ]; then
+if [ "$BENCH_TYPE" = "batch-parallel-f32" ] || [ "$BENCH_TYPE" = "batch-parallel-bf16f32" ]; then
     ./openblas_bench "$BATCH_SIZE" "$M" "$K" "$N"
 else
     ./openblas_bench "$M" "$K" "$N"
