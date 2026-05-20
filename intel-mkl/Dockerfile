@@ -18,7 +18,7 @@ RUN apt-get update && \
 
 FROM base
 WORKDIR /app
-COPY mkl_bench_f32.cpp mkl_bench_batch_parallel_f32.cpp mkl_bench_u8s8s32.cpp mkl_bench_batch_parallel_u8s8s32.cpp build_and_run.sh ./
+COPY mkl_bench_f32.cpp mkl_bench_batch_parallel_f32.cpp mkl_bench_batch_parallel_bf16f32.cpp mkl_bench_u8s8s32.cpp mkl_bench_batch_parallel_u8s8s32.cpp build_and_run.sh ./
 
 ENV MKLROOT=/opt/intel/oneapi/mkl/latest
 # Add both MKL and LLVM's lib directories (for libomp.so) to the runtime path.

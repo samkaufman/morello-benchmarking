@@ -4,8 +4,9 @@ set -e
 usage() {
     echo "Usage: $0 <benchmark_type> <m> <k> <n>"
     echo "       $0 batch-parallel-f32 <batch_size> <m> <k> <n>"
+    echo "       $0 batch-parallel-bf16f32 <batch_size> <m> <k> <n>"
     echo "       $0 batch-parallel-u8s8s32 <batch_size> <m> <k> <n>"
-    echo "  benchmark_type: u8s8s32, f32, batch-parallel-f32, or batch-parallel-u8s8s32"
+    echo "  benchmark_type: u8s8s32, f32, batch-parallel-f32, batch-parallel-bf16f32, or batch-parallel-u8s8s32"
     echo "  batch_size: number of parallel batches (for batch-parallel-* only)"
     echo "  m: matrix dimension M"
     echo "  k: matrix dimension K"
@@ -20,7 +21,7 @@ fi
 
 BENCH_TYPE="$1"
 
-if [ "$BENCH_TYPE" = "batch-parallel-f32" ] || [ "$BENCH_TYPE" = "batch-parallel-u8s8s32" ]; then
+if [ "$BENCH_TYPE" = "batch-parallel-f32" ] || [ "$BENCH_TYPE" = "batch-parallel-bf16f32" ] || [ "$BENCH_TYPE" = "batch-parallel-u8s8s32" ]; then
     if [ $# -lt 5 ]; then
         usage
         exit 1
@@ -63,6 +64,8 @@ if [ "$BENCH_TYPE" = "f32" ]; then
     $BUILD -o mkl_bench mkl_bench_f32.cpp
 elif [ "$BENCH_TYPE" = "batch-parallel-f32" ]; then
     $BUILD -o mkl_bench mkl_bench_batch_parallel_f32.cpp
+elif [ "$BENCH_TYPE" = "batch-parallel-bf16f32" ]; then
+    $BUILD -o mkl_bench mkl_bench_batch_parallel_bf16f32.cpp
 elif [ "$BENCH_TYPE" = "u8s8s32" ]; then
     $BUILD -o mkl_bench mkl_bench_u8s8s32.cpp
 elif [ "$BENCH_TYPE" = "batch-parallel-u8s8s32" ]; then
@@ -73,7 +76,7 @@ else
     exit 1
 fi
 
-if [ "$BENCH_TYPE" = "batch-parallel-f32" ] || [ "$BENCH_TYPE" = "batch-parallel-u8s8s32" ]; then
+if [ "$BENCH_TYPE" = "batch-parallel-f32" ] || [ "$BENCH_TYPE" = "batch-parallel-bf16f32" ] || [ "$BENCH_TYPE" = "batch-parallel-u8s8s32" ]; then
     ./mkl_bench "$BATCH_SIZE" "$M" "$K" "$N"
 else
     ./mkl_bench "$M" "$K" "$N"
