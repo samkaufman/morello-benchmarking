@@ -13,27 +13,57 @@ use morello::target::Memory;
 use morello::target::{
     Avx2Target, Avx512Kernel, Avx512Target, CpuKernel,
     CpuMemory::{GL, L1, RF, VRF},
-    CpuTarget, Target,
+    CpuTarget, Target, TargetId,
 };
-use morello::utils::ToWriteFmt;
+use morello::utils::{prev_power_of_two_u32, ToWriteFmt};
+use morello::views::ViewE;
 use morello::{shape, spec};
 use nonzero::nonzero as nz;
 use smallvec::SmallVec;
-use std::{env, fmt::Debug, io, process};
+use std::{env, fmt::Debug, io, path::Path, process};
 
 const MC: u32 = 528;
 const KC: u32 = 528;
 const NC: u32 = 1056;
 const AVX512_BF16_L1_KC: u32 = 256;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum MatmulKind {
     F32,
     I32,
     BF16F32,
 }
 
+impl MatmulKind {
+    fn parse(arg: &str) -> Option<Self> {
+        match arg {
+            "f32" => Some(Self::F32),
+            "i32" => Some(Self::I32),
+            "bf16f32" => Some(Self::BF16F32),
+            _ => None,
+        }
+    }
+
+    fn packed_n_widths(self) -> (DimSize, DimSize) {
+        match self {
+            Self::F32 => (nz!(16u32), nz!(48u32)),
+            Self::BF16F32 => (nz!(16u32), nz!(32u32)),
+            // Int32-output modes currently need a conservative packed-N width for correctness.
+            Self::I32 => (nz!(4u32), nz!(4u32)),
+        }
+    }
+
+    fn avx2_mr(self) -> DimSize {
+        if self == Self::BF16F32 {
+            nz!(6u32)
+        } else {
+            nz!(4u32)
+        }
+    }
+}
+
 fn main() {
+    env_logger::init();
     let mut use_avx512 = false;
     let mut integer_args = vec![];
     let mut db_path: Option<String> = None;
@@ -41,31 +71,26 @@ fn main() {
 
     let mut args_iter = env::args().skip(1);
     while let Some(arg) = args_iter.next() {
-        if arg == "--avx512" {
-            use_avx512 = true;
-            continue;
-        } else if arg == "--db" {
-            db_path = args_iter.next();
-            if db_path.is_none() {
-                panic!("--db flag requires a path argument");
+        match arg.as_str() {
+            "--avx512" => use_avx512 = true,
+            "--db" => {
+                db_path = Some(
+                    args_iter
+                        .next()
+                        .unwrap_or_else(|| panic!("--db flag requires a path argument")),
+                );
             }
-            continue;
-        } else if arg == "f32" {
-            if kind.replace(MatmulKind::F32).is_some() {
-                panic!("dtype specified multiple times");
+            _ => {
+                if let Some(arg_kind) = MatmulKind::parse(&arg) {
+                    if kind.replace(arg_kind).is_some() {
+                        panic!("dtype specified multiple times");
+                    }
+                } else if let Ok(v) = arg.parse::<u32>() {
+                    integer_args.push(v);
+                } else {
+                    panic!("Unrecognized argument: {}", arg);
+                }
             }
-        } else if arg == "i32" {
-            if kind.replace(MatmulKind::I32).is_some() {
-                panic!("dtype specified multiple times");
-            }
-        } else if arg == "bf16f32" {
-            if kind.replace(MatmulKind::BF16F32).is_some() {
-                panic!("dtype specified multiple times");
-            }
-        } else if let Ok(v) = arg.parse::<u32>() {
-            integer_args.push(v);
-        } else {
-            panic!("Unrecognized argument: {}", arg);
         }
     }
 
@@ -78,12 +103,7 @@ fn main() {
         process::exit(2);
     };
 
-    let (avx2_v_n_size, avx512_v_n_size) = match kind {
-        MatmulKind::F32 => (nz!(16u32), nz!(48u32)),
-        MatmulKind::BF16F32 => (nz!(8u32), nz!(32u32)),
-        // Int32-output modes currently need a conservative packed-N width for correctness.
-        MatmulKind::I32 => (nz!(4u32), nz!(4u32)),
-    };
+    let (avx2_v_n_size, avx512_v_n_size) = kind.packed_n_widths();
 
     if use_avx512 {
         main_per_target::<Avx512Target>(
@@ -97,7 +117,16 @@ fn main() {
             kind,
         );
     } else {
-        main_per_target::<Avx2Target>(batch_size, m, k, n, avx2_v_n_size, nz!(4u32), db_path, kind);
+        main_per_target::<Avx2Target>(
+            batch_size,
+            m,
+            k,
+            n,
+            avx2_v_n_size,
+            kind.avx2_mr(),
+            db_path,
+            kind,
+        );
     }
 }
 
@@ -116,37 +145,7 @@ fn main_per_target<Tgt>(
     Tgt::Memory: CanonicalBimap,
     <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
 {
-    main_per_target_with_schedule::<Tgt, _>(
-        batch_size,
-        m,
-        k,
-        n,
-        v_n_size,
-        mr,
-        db_path,
-        kind,
-        schedule_matmul_serial::<Tgt>,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-fn main_per_target_with_schedule<Tgt, F>(
-    batch_size: u32,
-    m: u32,
-    k: u32,
-    n: u32,
-    v_n_size: DimSize,
-    mr: DimSize,
-    db_path: Option<String>,
-    kind: MatmulKind,
-    schedule_fn: F,
-) where
-    Tgt: Bf16InnerSchedule,
-    Tgt::Memory: CanonicalBimap,
-    <Tgt::Memory as CanonicalBimap>::Bimap: BiMap<Codomain = u8>,
-    F: Fn(&ImplNode<Tgt>, u32, u32, DimSize, DimSize) -> ImplNode<Tgt>,
-{
-    let db_path_ref = db_path.as_deref().map(std::path::Path::new);
+    let db_path_ref = db_path.as_deref().map(Path::new);
     let db = FilesDatabase::new::<Tgt>(db_path_ref, TileScale::Linear, 1, 30_000, 1);
 
     let mut spec: Spec<Tgt> = match kind {
@@ -172,8 +171,9 @@ fn main_per_target_with_schedule<Tgt, F>(
     spec.0.set_serial_only(batch_size == 1);
     spec.canonicalize().unwrap();
 
-    let implementation =
-        spec.tile_out_parallel_ensure_continue(&[1, m, n], |s| schedule_fn(s, m, n, v_n_size, mr));
+    let implementation = tile_out_parallel_ensure_continue(&spec, &[1, m, n], |s| {
+        schedule_matmul_serial(s, m, n, v_n_size, mr)
+    });
     let implementation = apply_rewrites(implementation);
     let implementation = implementation.synthesize_all(&db);
     drop(db); // spill to disk here
@@ -185,33 +185,70 @@ fn main_per_target_with_schedule<Tgt, F>(
         )
         .unwrap_or_else(|e| panic!("Failed to generate code: {}", e));
 
-    // If the verification flag is set, let's additionally double-check that the lowered
-    // code builds and produces the correct results.
-    #[cfg(feature = "verification")]
-    {
-        match implementation.build(false) {
-            Ok(artifact) => {
-                if !artifact.check_correctness(&spec) {
-                    panic!("Generated code returned incorrect output");
+    let skip_build = env::var("MATMUL_SKIP_BUILD").is_ok();
+    if !skip_build {
+        // If the verification flag is set, let's additionally double-check that the lowered
+        // code builds and produces the correct results.
+        #[cfg(feature = "verification")]
+        {
+            match implementation.build(false) {
+                Ok(artifact) => {
+                    if !artifact.check_correctness(&spec) {
+                        panic!("Generated code returned incorrect output");
+                    }
+                }
+                Err(e) => {
+                    panic!("Failed to build generated code: {}", e);
                 }
             }
-            Err(e) => {
-                panic!("Failed to build generated code: {}", e);
-            }
         }
-    }
 
-    // Benchmark.
-    let build_result = implementation
-        .build(true)
-        .unwrap_or_else(|e| panic!("Failed to build generated code for benchmarking: {}", e));
-    println!("{}", build_result.binary_path().display());
+        // Benchmark.
+        let build_result = implementation
+            .build(true)
+            .unwrap_or_else(|e| panic!("Failed to build generated code for benchmarking: {}", e));
+        println!("{}", build_result.binary_path().display());
+    }
 }
 
 fn eprint_usage_message() {
     eprintln!(
         "Usage: matmul_x86_parameterized [--avx512] [--db <path>] <f32|i32|bf16f32> <batch_size> <m> <k> <n>"
     );
+}
+
+fn spec_of<Tgt: Target>(node: &ImplNode<Tgt>) -> &Spec<Tgt> {
+    let ImplNode::SpecApp(SpecApp(spec, ..)) = node else {
+        unreachable!();
+    };
+    spec
+}
+
+fn matmul_accum<Tgt: Target>(spec: &Spec<Tgt>) -> Option<bool> {
+    let LogicalSpec::Primitive(
+        PrimitiveBasics {
+            typ: PrimitiveSpecType::Matmul { accum },
+            ..
+        },
+        ..,
+    ) = &spec.0
+    else {
+        return None;
+    };
+    Some(*accum)
+}
+
+fn is_move<Tgt: Target>(spec: &Spec<Tgt>) -> bool {
+    matches!(
+        &spec.0,
+        LogicalSpec::Primitive(
+            PrimitiveBasics {
+                typ: PrimitiveSpecType::Move,
+                ..
+            },
+            ..
+        )
+    )
 }
 
 fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
@@ -229,99 +266,120 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
     spec_app.tile_out_ensure_continue(&[1, (m / mr.get()) * mr.get(), n], |a| {
         // layout_a packs the M dimension up to size `mr`. (If smaller than `mr`, layout_a will
         // just be canonicalized to batched column-major.)
-        let ImplNode::SpecApp(SpecApp(spec_a, ..)) = a else {
-            unreachable!();
-        };
+        let spec_a = spec_of(a);
         let m_inner = spec_a.0.parameter_shape(0)[1].min(mr);
-        let layout_a = if is_bf16f32_matmul(spec_a)
-            && spec_a.0.parameter_shape(0)[2].get().is_multiple_of(2)
-        {
-            layout![0, 1, 2, 1 p(m_inner), 2 p(2)]
-        } else {
-            layout![0, 1, 2, 1 p(m_inner)]
-        };
+        let bf16f32 = is_bf16f32_matmul(spec_a);
+        let avx2_bf16 = bf16f32 && Tgt::target_id() == TargetId::Avx2;
+        let layout_a =
+            if bf16f32 && !avx2_bf16 && spec_a.0.parameter_shape(0)[2].get().is_multiple_of(2) {
+                layout![0, 1, 2, 1 p(m_inner), 2 p(2)]
+            } else {
+                layout![0, 1, 2, 1 p(m_inner)]
+            };
 
         a.tile_out_ensure_continue(&[1, MC, n], |b| {
             b.split_saturating_ensure_continue(KC, |c| {
                 // TODO: move_relayout(0,..) does some redundant work here
                 let stripped_n = (n / v_n_size) * v_n_size.get(); // peels some off for Packed dim.
-                c.move_relayout(0, GL, layout_a.clone(), None)
-                    .tile_out_ensure_continue(&[1, MC, stripped_n], |d| {
-                        let ImplNode::SpecApp(SpecApp(spec_d, ..)) = d else {
-                            unreachable!();
-                        };
-                        let n_inner = spec_d.0.parameter_shape(1)[2].min(v_n_size);
-                        let layout_b = if is_bf16f32_matmul(spec_d)
-                            && spec_d.0.parameter_shape(1)[1].get().is_multiple_of(2)
-                        {
-                            layout![0, 2, 1, 2 p(n_inner), 1 p(2)]
+                let c = if avx2_bf16 {
+                    c.clone()
+                } else {
+                    c.move_relayout(0, GL, layout_a.clone(), None)
+                };
+                c.tile_out_ensure_continue(&[1, MC, stripped_n], |d| {
+                    let spec_d = spec_of(d);
+                    let n_inner = spec_d.0.parameter_shape(1)[2].min(v_n_size);
+                    let bf16f32 = is_bf16f32_matmul(spec_d);
+                    let avx2_bf16 = bf16f32 && Tgt::target_id() == TargetId::Avx2;
+                    let layout_b = if bf16f32
+                        && !avx2_bf16
+                        && spec_d.0.parameter_shape(1)[1].get().is_multiple_of(2)
+                    {
+                        layout![0, 2, 1, 2 p(n_inner), 1 p(2)]
+                    } else {
+                        layout![0, 2, 1, 2 p(n_inner)]
+                    };
+
+                    d.tile_out_ensure_continue(&[1, MC, NC], |e| {
+                        let spec_e = spec_of(&e);
+                        let e = if avx2_bf16 {
+                            e.clone()
                         } else {
-                            layout![0, 2, 1, 2 p(n_inner)]
+                            e.move_relayout(1, GL, layout_b.clone(), None)
                         };
-
-                        d.tile_out_ensure_continue(&[1, MC, NC], |e| {
-                            let ImplNode::SpecApp(SpecApp(spec_e, ..)) = &e else {
-                                unreachable!();
+                        let out_shape = spec_e.0.parameter_shape(2);
+                        if avx2_bf16 {
+                            let n_tile =
+                                [nz!(16u32), nz!(8u32), nz!(4u32)]
+                                    .into_iter()
+                                    .find(|&width| {
+                                        out_shape[2] >= width
+                                            && out_shape[2].get().is_multiple_of(width.get())
+                                    });
+                            let m_tile = if out_shape[1] >= nz!(6u32) {
+                                nz!(6u32)
+                            } else {
+                                nz!(1u32)
                             };
-
-                            let lb0 = layout_b.clone();
-                            let e = e.move_relayout(1, GL, lb0, None);
-                            let mc_tile_size = spec_e.0.parameter_shape(0)[1].get();
-                            chain_tile(
-                                &e,
-                                &[
-                                    shape![1, mc_tile_size, v_n_size.get()],
-                                    shape![1, mc_tile_size, 16],
-                                    shape![1, mc_tile_size, 8],
-                                    shape![1, mc_tile_size, 4],
-                                ],
-                                &|f| {
-                                    f.tile_out_ensure_continue(
-                                        &[1, mr.get(), v_n_size.get()],
-                                        |i| {
-                                            let ImplNode::SpecApp(SpecApp(spec_i, ..)) = &i else {
-                                                unreachable!();
-                                            };
-                                            if spec_i.0.parameter_shape(1)[2] < nz!(4u32) {
-                                                i.split(1)
-                                            } else {
-                                                let width =
-                                                    [v_n_size, nz!(16u32), nz!(8u32), nz!(4u32)]
-                                                        .into_iter()
-                                                        .find(|&s| {
-                                                            spec_i.0.parameter_shape(1)[2] >= s
-                                                        })
-                                                        .unwrap();
-                                                let v = vec_size.min(width);
-                                                if is_bf16f32_matmul(spec_i) {
-                                                    Tgt::schedule_bf16_inner_tile(i, v)
-                                                } else {
-                                                    i.move_param(2, L1).move_vrf(2, VRF, v.get())
-                                                }
-                                            }
+                            if let Some(n_tile) = n_tile {
+                                if out_shape[1].get().is_multiple_of(m_tile.get()) {
+                                    let f32_e = e
+                                        .cast(0, Dtype::Float32, GL, row_major, None)
+                                        .cast(1, Dtype::Float32, GL, row_major, None);
+                                    let vector_width = n_tile.min(nz!(8u32));
+                                    return f32_e.tile_out_ensure_continue(
+                                        &[1, m_tile.get(), n_tile.get()],
+                                        |tile| {
+                                            schedule_broadcast_vec_mult_add_tile(tile, vector_width)
                                         },
-                                    )
-                                },
-                            )
-                        })
+                                    );
+                                }
+                            }
+                        }
+                        let mc_tile_size = spec_e.0.parameter_shape(0)[1].get();
+                        chain_tile(
+                            &e,
+                            &[
+                                shape![1, mc_tile_size, v_n_size.get()],
+                                shape![1, mc_tile_size, 16],
+                                shape![1, mc_tile_size, 8],
+                                shape![1, mc_tile_size, 4],
+                            ],
+                            &|f| {
+                                f.tile_out_ensure_continue(&[1, mr.get(), v_n_size.get()], |i| {
+                                    let spec_i = spec_of(i);
+                                    let avx2_bf16_n_tail = is_bf16f32_matmul(spec_i)
+                                        && Tgt::target_id() == TargetId::Avx2
+                                        && spec_i.0.parameter_shape(1)[2] < nz!(8u32);
+                                    if avx2_bf16_n_tail {
+                                        schedule_bf16_scalar_tail_tile(i)
+                                    } else if spec_i.0.parameter_shape(1)[2] < nz!(4u32) {
+                                        i.split(1)
+                                    } else {
+                                        let width = [v_n_size, nz!(16u32), nz!(8u32), nz!(4u32)]
+                                            .into_iter()
+                                            .find(|&s| spec_i.0.parameter_shape(1)[2] >= s)
+                                            .unwrap();
+                                        let v = vec_size.min(width);
+                                        if is_bf16f32_matmul(spec_i) {
+                                            Tgt::schedule_bf16_inner_tile(i, v)
+                                        } else {
+                                            i.move_param(2, L1).move_vrf(2, VRF, v.get())
+                                        }
+                                    }
+                                })
+                            },
+                        )
                     })
+                })
             })
         })
     })
 }
 
 fn is_bf16f32_matmul<Tgt: CpuTarget>(spec: &Spec<Tgt>) -> bool {
-    matches!(
-        &spec.0,
-        LogicalSpec::Primitive(
-            PrimitiveBasics {
-                typ: PrimitiveSpecType::Matmul { accum: true },
-                ..
-            },
-            _,
-            _,
-        )
-    ) && spec.0.parameter(0).dtype() == Dtype::Bfloat16
+    matmul_accum(spec) == Some(true)
+        && spec.0.parameter(0).dtype() == Dtype::Bfloat16
         && spec.0.parameter(1).dtype() == Dtype::Bfloat16
         && spec.0.parameter(2).dtype() == Dtype::Float32
 }
@@ -329,10 +387,11 @@ fn is_bf16f32_matmul<Tgt: CpuTarget>(spec: &Spec<Tgt>) -> bool {
 trait Bf16InnerSchedule: CpuTarget {
     /// Applies the target-specific innermost BF16 matmul tiling before selecting a kernel.
     ///
-    /// AVX2 keeps the scalar-K schedule. AVX512 splits K to a cache-sized leaf, moves
-    /// packed A/B slices to L1, and tiles the output to a small M block and up to two
-    /// 16-lane N vectors so the selected `VDPBF16PS` kernel has enough independent
-    /// accumulator chains for Zen 5 while still fitting in zmm registers.
+    /// AVX2 keeps the scalar-K schedule for remainder tiles. AVX512 splits K to a
+    /// cache-sized leaf, moves packed A/B slices to L1, and tiles the output to a
+    /// small M block and up to two 16-lane N vectors so the selected `VDPBF16PS`
+    /// kernel has enough independent accumulator chains for Zen 5 while still
+    /// fitting in zmm registers.
     fn schedule_bf16_inner_tile(matmul: &ImplNode<Self>, vector_width: DimSize) -> ImplNode<Self>;
 }
 
@@ -352,17 +411,13 @@ impl Bf16InnerSchedule for Avx512Target {
             );
         }
 
-        let ImplNode::SpecApp(SpecApp(spec, ..)) = matmul else {
-            unreachable!();
-        };
+        let spec = spec_of(matmul);
         let m_block = spec.0.parameter_shape(0)[1].min(nz!(6u32));
         matmul.tile_out_ensure_continue(&[1, m_block.get(), vector_width.get() * 2], |m_tile| {
             m_tile
                 .move_vrf(2, VRF, vector_width.get())
                 .split_saturating_ensure_continue(AVX512_BF16_L1_KC, |k_tile| {
-                    let ImplNode::SpecApp(SpecApp(spec, ..)) = k_tile else {
-                        unreachable!();
-                    };
+                    let spec = spec_of(k_tile);
                     let mut scheduled = k_tile.clone();
                     if spec.0.parameter(0).memory() != L1 {
                         scheduled = scheduled.move_param(0, L1);
@@ -400,18 +455,94 @@ fn schedule_bf16_scalar_k_tile<Tgt: CpuTarget>(
     })
 }
 
+fn schedule_broadcast_vec_mult_add_tile<Tgt: CpuTarget>(
+    matmul: &ImplNode<Tgt>,
+    vector_width: DimSize,
+) -> ImplNode<Tgt> {
+    matmul
+        .move_vrf(2, VRF, vector_width.get())
+        .split_saturating_ensure_continue(1, |k_tile| {
+            let spec = spec_of(k_tile);
+            let n_tile = spec.0.parameter_shape(2)[2].get();
+            k_tile
+                .move_vrf(1, VRF, vector_width.get())
+                .tile_out_ensure_continue(&[1, 1, n_tile], |row_tile| {
+                    row_tile
+                        .move_param(0, L1)
+                        .select(CpuKernel::BroadcastVecMultAdd)
+                })
+        })
+}
+
+fn schedule_bf16_scalar_tail_tile<Tgt: CpuTarget>(matmul: &ImplNode<Tgt>) -> ImplNode<Tgt> {
+    matmul.tile_out_ensure_continue(&[1, 1, 1], |m_tile| {
+        m_tile.split_saturating_ensure_continue(1, |k_tile| {
+            k_tile
+                .cast(0, Dtype::Float32, RF, row_major, None)
+                .cast(1, Dtype::Float32, RF, row_major, None)
+                .move_param(2, RF)
+                .select(CpuKernel::MultAdd)
+        })
+    })
+}
+
+fn is_bf16_to_f32_move<Tgt: CpuTarget>(spec: &Spec<Tgt>) -> bool {
+    is_move(spec) && {
+        let params = spec.0.parameters();
+        params.len() == 2
+            && params[0].dtype() == Dtype::Bfloat16
+            && params[1].dtype() == Dtype::Float32
+    }
+}
+
+fn schedule_scalar_bf16_to_f32_move<Tgt: CpuTarget>(mov: &ImplNode<Tgt>) -> ImplNode<Tgt> {
+    let spec = spec_of(mov);
+
+    let mut scheduled = mov.clone();
+    if spec.0.parameter(0).memory() != RF {
+        scheduled = scheduled.move_param(0, RF);
+    }
+    if spec.0.parameter(1).memory() != RF {
+        scheduled = scheduled.move_param(1, RF);
+    }
+    scheduled.select(CpuKernel::CastBf16F32)
+}
+
+fn schedule_bf16_to_f32_move<Tgt: CpuTarget>(
+    mov: &ImplNode<Tgt>,
+    spec: &Spec<Tgt>,
+) -> ImplNode<Tgt> {
+    let output = spec.0.parameter(1);
+    let output_shape = output.shape();
+    if output.volume().get() < 16 {
+        let tile_shape: Vec<u32> = output_shape.iter().map(|_| 1).collect();
+        let scheduled = mov.tile_out_ensure_continue(&tile_shape, schedule_scalar_bf16_to_f32_move);
+        return apply_rewrites(scheduled);
+    }
+
+    let mut tile_shape: Vec<u32> = output_shape.iter().map(|_| 1).collect();
+    let vector_dim = output_shape
+        .iter()
+        .rposition(|d| d.get() >= 16)
+        .expect("volume >= 16 should have a dimension large enough for vector cast");
+    tile_shape[vector_dim] = 16;
+    let scheduled = mov.tile_out_ensure_continue(&tile_shape, |tile| {
+        let tile_spec = spec_of(tile);
+        if tile_spec.0.parameter(1).volume().get() < 16 {
+            let scalar_shape: Vec<u32> = tile_spec.0.parameter_shape(1).iter().map(|_| 1).collect();
+            tile.tile_out_ensure_continue(&scalar_shape, schedule_scalar_bf16_to_f32_move)
+        } else {
+            tile.move_relayout(0, VRF, row_major, Some(16))
+                .move_relayout(1, VRF, row_major, Some(8))
+                .select(CpuKernel::VectorCastBf16F32)
+        }
+    });
+    apply_rewrites(scheduled)
+}
+
 fn apply_rewrites<Tgt: CpuTarget>(implementation: ImplNode<Tgt>) -> ImplNode<Tgt> {
     implementation.map_spec_leaves(&|spec_app| {
-        if !matches!(
-            &spec_app.0 .0,
-            LogicalSpec::Primitive(
-                PrimitiveBasics {
-                    typ: PrimitiveSpecType::Move,
-                    ..
-                },
-                ..
-            )
-        ) {
+        if !is_move(&spec_app.0) {
             return ImplNode::SpecApp(spec_app);
         }
 
@@ -419,12 +550,24 @@ fn apply_rewrites<Tgt: CpuTarget>(implementation: ImplNode<Tgt>) -> ImplNode<Tgt
         let implementation = ImplNode::SpecApp(spec_app.clone());
 
         let spec: &Spec<Tgt> = &spec_app.0;
+        if is_bf16_to_f32_move(spec) {
+            return schedule_bf16_to_f32_move(&implementation, spec);
+        }
+
+        let params = spec.0.parameters();
+        if params.len() == 2
+            && params[0].dtype() == params[1].dtype()
+            && CpuKernel::Assign.applies_to_logical_spec(&spec.0)
+        {
+            return implementation.select(CpuKernel::Assign);
+        }
+
         let output_idx = spec.0.unique_output_index().unwrap();
         let new_tile_shape: Vec<u32> = spec
             .0
             .parameter_shape(output_idx)
             .iter()
-            .map(|o| morello::utils::prev_power_of_two_u32(o.get().min(16)))
+            .map(|o| prev_power_of_two_u32(o.get().min(16)))
             .collect();
         let mut new_impl = implementation.tile_out_ensure(&new_tile_shape);
         let mut changed = false;
@@ -454,10 +597,7 @@ where
     if let Some(next_shape) = shapes.first() {
         let next_shape_u32: SmallVec<[u32; 5]> = next_shape.iter().map(|d| d.get()).collect();
         imp.tile_out_ensure_continue(&next_shape_u32, |child| {
-            let ImplNode::SpecApp(child_app) = child else {
-                unreachable!();
-            };
-            if child_app.0 .0.unique_output().unwrap().shape() == &next_shape[..] {
+            if spec_of(child).0.unique_output().unwrap().shape() == &next_shape[..] {
                 inner_fn(child)
             } else {
                 chain_tile(child, &shapes[1..], inner_fn)
@@ -473,47 +613,21 @@ trait TileOutContinue<Tgt: CpuTarget>: SchedulingSugar<Tgt> {
     where
         F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>;
 
-    fn tile_out_parallel_ensure_continue<F>(
-        &self,
-        output_shape: &[u32],
-        continuation: F,
-    ) -> ImplNode<Tgt>
-    where
-        F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>;
-
-    /// Apply `split_saturating_hardcore` with the given k, then apply the continuation function to all SpecApp bodies
-    /// in the resulting Loop.
     fn split_saturating_ensure_continue<F>(&self, k: u32, continuation: F) -> ImplNode<Tgt>
     where
         F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>;
 }
 
-impl<Tgt: CpuTarget> TileOutContinue<Tgt> for Spec<Tgt> {
-    fn tile_out_ensure_continue<F>(&self, _output_shape: &[u32], _continuation: F) -> ImplNode<Tgt>
-    where
-        F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
-    {
-        todo!()
-    }
-
-    fn tile_out_parallel_ensure_continue<F>(
-        &self,
-        output_shape: &[u32],
-        continuation: F,
-    ) -> ImplNode<Tgt>
-    where
-        F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
-    {
-        let new_loop = self.tile_out_parallel_ensure(output_shape);
-        apply_fn_to_leaves(&new_loop, &continuation)
-    }
-
-    fn split_saturating_ensure_continue<F>(&self, _k: u32, _continuation: F) -> ImplNode<Tgt>
-    where
-        F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
-    {
-        todo!()
-    }
+fn tile_out_parallel_ensure_continue<Tgt, F>(
+    spec: &Spec<Tgt>,
+    output_shape: &[u32],
+    continuation: F,
+) -> ImplNode<Tgt>
+where
+    Tgt: CpuTarget,
+    F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
+{
+    apply_fn_to_leaves(&spec.tile_out_parallel_ensure(output_shape), &continuation)
 }
 
 impl<Tgt: CpuTarget> TileOutContinue<Tgt> for ImplNode<Tgt> {
@@ -526,22 +640,6 @@ impl<Tgt: CpuTarget> TileOutContinue<Tgt> for ImplNode<Tgt> {
             continuation,
             |child, cont| child.tile_out_ensure_continue(output_shape, cont),
             |node| node.tile_out_ensure(output_shape),
-        )
-    }
-
-    fn tile_out_parallel_ensure_continue<F>(
-        &self,
-        output_shape: &[u32],
-        continuation: F,
-    ) -> ImplNode<Tgt>
-    where
-        F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
-    {
-        apply_continue_impl(
-            self,
-            continuation,
-            |child, cont| child.tile_out_parallel_ensure_continue(output_shape, cont),
-            |node| node.tile_out_parallel_ensure(output_shape),
         )
     }
 
@@ -584,46 +682,48 @@ where
     Tgt: CpuTarget,
     F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
 {
-    if node.children().is_empty() {
-        match node {
-            ImplNode::SpecApp(_) => f(node),
-            _ => node.clone(),
-        }
-    } else {
-        node.replace_children(node.children().iter().map(|c| match c {
-            ImplNode::SpecApp(_) => f(c),
-            _ => apply_fn_to_leaves(c, f),
-        }))
+    match node {
+        ImplNode::SpecApp(_) => f(node),
+        _ if node.children().is_empty() => node.clone(),
+        _ => map_children(node, |child| apply_fn_to_leaves(child, f)),
     }
 }
 
-trait SchedulingSugarExt<Tgt: Target> {
-    fn tile_out_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
-    fn tile_out_parallel_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
-    fn tile_out_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
-    fn tile_out_parallel_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt>;
-    fn split_saturating(&self, k: u32) -> morello::imp::ImplNode<Tgt>;
-    fn split_saturating_ensure(&self, k: u32) -> morello::imp::ImplNode<Tgt>;
+fn map_children<Tgt, F>(node: &ImplNode<Tgt>, f: F) -> ImplNode<Tgt>
+where
+    Tgt: Target,
+    F: Fn(&ImplNode<Tgt>) -> ImplNode<Tgt>,
+{
+    node.replace_children(node.children().iter().map(f))
 }
 
-trait SpecProvider<Tgt: morello::target::Target> {
+trait SchedulingSugarExt<Tgt: Target> {
+    fn tile_out_saturating(&self, output_shape: &[u32]) -> ImplNode<Tgt>;
+    fn tile_out_parallel_saturating(&self, output_shape: &[u32]) -> ImplNode<Tgt>;
+    fn tile_out_ensure(&self, output_shape: &[u32]) -> ImplNode<Tgt>;
+    fn tile_out_parallel_ensure(&self, output_shape: &[u32]) -> ImplNode<Tgt>;
+    fn split_saturating(&self, k: u32) -> ImplNode<Tgt>;
+    fn split_saturating_ensure(&self, k: u32) -> ImplNode<Tgt>;
+}
+
+trait SpecProvider<Tgt: Target> {
     fn get_spec(&self) -> Option<&Spec<Tgt>>;
-    fn into_implnode(self) -> morello::imp::ImplNode<Tgt>;
-    fn into_specapp(self) -> morello::imp::subspecs::SpecApp<morello::views::ViewE<Tgt>>;
+    fn into_implnode(self) -> ImplNode<Tgt>;
+    fn into_specapp(self) -> SpecApp<ViewE<Tgt>>;
     fn child_count(&self) -> usize;
 }
 
-impl<Tgt: morello::target::Target> SpecProvider<Tgt> for Spec<Tgt> {
+impl<Tgt: Target> SpecProvider<Tgt> for Spec<Tgt> {
     fn get_spec(&self) -> Option<&Spec<Tgt>> {
         Some(self)
     }
 
-    fn into_implnode(self) -> morello::imp::ImplNode<Tgt> {
+    fn into_implnode(self) -> ImplNode<Tgt> {
         self.into_specapp().into()
     }
 
-    fn into_specapp(self) -> morello::imp::subspecs::SpecApp<morello::views::ViewE<Tgt>> {
-        morello::imp::subspecs::SpecApp::new_with_default_params(self)
+    fn into_specapp(self) -> SpecApp<ViewE<Tgt>> {
+        SpecApp::new_with_default_params(self)
     }
 
     fn child_count(&self) -> usize {
@@ -631,40 +731,34 @@ impl<Tgt: morello::target::Target> SpecProvider<Tgt> for Spec<Tgt> {
     }
 }
 
-impl<Tgt: morello::target::Target> SpecProvider<Tgt> for morello::imp::ImplNode<Tgt> {
+impl<Tgt: Target> SpecProvider<Tgt> for ImplNode<Tgt> {
     fn get_spec(&self) -> Option<&Spec<Tgt>> {
         match self {
-            morello::imp::ImplNode::SpecApp(app) => Some(&app.0),
+            ImplNode::SpecApp(app) => Some(&app.0),
             _ => None,
         }
     }
 
-    fn into_implnode(self) -> morello::imp::ImplNode<Tgt> {
+    fn into_implnode(self) -> ImplNode<Tgt> {
         self
     }
 
-    fn into_specapp(self) -> morello::imp::subspecs::SpecApp<morello::views::ViewE<Tgt>> {
+    fn into_specapp(self) -> SpecApp<ViewE<Tgt>> {
         match self {
-            morello::imp::ImplNode::SpecApp(app) => app,
+            ImplNode::SpecApp(app) => app,
             _ => unimplemented!(),
         }
     }
 
     fn child_count(&self) -> usize {
-        use morello::imp::Impl;
-
         self.children().len()
     }
 }
 
-fn tile_out_saturating_impl<T, Tgt>(
-    node: &T,
-    output_shape: &[u32],
-    parallel: bool,
-) -> morello::imp::ImplNode<Tgt>
+fn tile_out_saturating_impl<T, Tgt>(node: &T, output_shape: &[u32], parallel: bool) -> ImplNode<Tgt>
 where
     T: SchedulingSugar<Tgt> + SpecProvider<Tgt> + Clone + Debug,
-    Tgt: morello::target::Target,
+    Tgt: Target,
 {
     if node.child_count() != 0 {
         return node
@@ -713,17 +807,17 @@ where
 impl<T, Tgt> SchedulingSugarExt<Tgt> for T
 where
     T: SchedulingSugar<Tgt> + SpecProvider<Tgt> + Clone + Debug,
-    Tgt: morello::target::Target,
+    Tgt: Target,
 {
-    fn tile_out_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
+    fn tile_out_saturating(&self, output_shape: &[u32]) -> ImplNode<Tgt> {
         tile_out_saturating_impl(self, output_shape, false)
     }
 
-    fn tile_out_parallel_saturating(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
+    fn tile_out_parallel_saturating(&self, output_shape: &[u32]) -> ImplNode<Tgt> {
         tile_out_saturating_impl(self, output_shape, true)
     }
 
-    fn tile_out_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
+    fn tile_out_ensure(&self, output_shape: &[u32]) -> ImplNode<Tgt> {
         if self.child_count() != 0 {
             return self
                 .clone()
@@ -737,7 +831,7 @@ where
         tile_out_until_fit(&initial_result, output_shape)
     }
 
-    fn tile_out_parallel_ensure(&self, output_shape: &[u32]) -> morello::imp::ImplNode<Tgt> {
+    fn tile_out_parallel_ensure(&self, output_shape: &[u32]) -> ImplNode<Tgt> {
         if self.child_count() != 0 {
             return self
                 .clone()
@@ -751,9 +845,7 @@ where
         tile_out_until_fit(&initial_result, output_shape)
     }
 
-    fn split_saturating(&self, k: u32) -> morello::imp::ImplNode<Tgt> {
-        use morello::spec::LogicalSpec;
-
+    fn split_saturating(&self, k: u32) -> ImplNode<Tgt> {
         if self.child_count() != 0 {
             return self
                 .clone()
@@ -762,16 +854,9 @@ where
         }
 
         let spec = self.get_spec().unwrap();
-        let LogicalSpec::Primitive(
-            spec::PrimitiveBasics {
-                typ: spec::PrimitiveSpecType::Matmul { .. },
-                ..
-            },
-            ..,
-        ) = &spec.0
-        else {
+        if matmul_accum(spec).is_none() {
             unimplemented!();
-        };
+        }
 
         let current_k = spec.0.parameter_shape(0)[2].get();
         if current_k <= k {
@@ -780,7 +865,7 @@ where
         self.split(k)
     }
 
-    fn split_saturating_ensure(&self, k: u32) -> morello::imp::ImplNode<Tgt> {
+    fn split_saturating_ensure(&self, k: u32) -> ImplNode<Tgt> {
         if self.child_count() != 0 {
             return self
                 .clone()
@@ -793,87 +878,43 @@ where
     }
 }
 
-/// Recursively processes all SpecApp leaves in the tree to ensure they have output shapes within target
-fn tile_out_until_fit<Tgt: morello::target::Target>(
-    node: &morello::imp::ImplNode<Tgt>,
-    output_shape: &[u32],
-) -> morello::imp::ImplNode<Tgt> {
+fn tile_out_until_fit<Tgt: Target>(node: &ImplNode<Tgt>, output_shape: &[u32]) -> ImplNode<Tgt> {
     match node {
-        morello::imp::ImplNode::SpecApp(spec_app) => {
+        ImplNode::SpecApp(spec_app) => {
             let spec = &spec_app.0;
 
-            // Check if this SpecApp has an output shape that exceeds the target
             if let Some(output_idx) = spec.0.unique_output_index() {
                 let current_shape = spec.0.parameter_shape(output_idx);
-
-                // Check if any dimension exceeds the target output shape
-                let needs_further_tiling = current_shape
+                if current_shape
                     .iter()
                     .zip(output_shape.iter())
-                    .any(|(current, &target)| current.get() > target);
-
-                if needs_further_tiling {
-                    // Use tile_out_hardcore to ensure complete tiling
+                    .any(|(current, &target)| current.get() > target)
+                {
                     let tiled_result = node.tile_out_ensure(output_shape);
                     return tile_out_until_fit(&tiled_result, output_shape);
                 }
             }
-
-            // Return the SpecApp as-is if it doesn't need further tiling
             node.clone()
         }
-        _ => {
-            // For non-SpecApp nodes, recursively process their children
-            let processed_children: Vec<_> = node
-                .children()
-                .iter()
-                .map(|child| tile_out_until_fit(child, output_shape))
-                .collect();
-
-            node.replace_children(processed_children.into_iter())
-        }
+        _ => map_children(node, |child| tile_out_until_fit(child, output_shape)),
     }
 }
 
-/// Recursively processes all SpecApp leaves in the tree to ensure they are properly split by k
-fn hardcore_process_all_splits<Tgt: morello::target::Target>(
-    node: &morello::imp::ImplNode<Tgt>,
-    k: u32,
-) -> morello::imp::ImplNode<Tgt> {
+fn hardcore_process_all_splits<Tgt: Target>(node: &ImplNode<Tgt>, k: u32) -> ImplNode<Tgt> {
     match node {
-        morello::imp::ImplNode::SpecApp(spec_app) => {
+        ImplNode::SpecApp(spec_app) => {
             let spec = &spec_app.0;
-
-            // Check if this SpecApp is a MatmulAccum that needs further splitting
-            if let LogicalSpec::Primitive(
-                morello::spec::PrimitiveBasics {
-                    typ: morello::spec::PrimitiveSpecType::Matmul { .. },
-                    ..
-                },
-                ..,
-            ) = &spec.0
-            {
+            if matmul_accum(spec).is_some() {
                 let current_k = spec.0.parameter_shape(0)[2].get();
 
                 if current_k > k {
-                    // Apply split_saturating_hardcore recursively to this SpecApp
                     let split_result = node.split_saturating_ensure(k);
                     return hardcore_process_all_splits(&split_result, k);
                 }
             }
 
-            // Return the SpecApp as-is if it doesn't need further splitting
             node.clone()
         }
-        _ => {
-            // For non-SpecApp nodes, recursively process their children
-            let processed_children: Vec<_> = node
-                .children()
-                .iter()
-                .map(|child| hardcore_process_all_splits(child, k))
-                .collect();
-
-            node.replace_children(processed_children.into_iter())
-        }
+        _ => map_children(node, |child| hardcore_process_all_splits(child, k)),
     }
 }
