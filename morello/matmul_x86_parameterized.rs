@@ -25,7 +25,11 @@ use std::{env, fmt::Debug, io, path::Path, process};
 const MC: u32 = 528;
 const KC: u32 = 528;
 const NC: u32 = 1056;
-const AVX512_BF16_L1_KC: u32 = 256;
+const AVX512_BF16_MC: u32 = 2400;
+const AVX512_BF16_KC: u32 = 2400;
+const AVX512_BF16_NC: u32 = 2400;
+const AVX512_BF16_MR: u32 = 12;
+const AVX512_BF16_L1_KC: u32 = 336;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MatmulKind {
@@ -106,13 +110,18 @@ fn main() {
     let (avx2_v_n_size, avx512_v_n_size) = kind.packed_n_widths();
 
     if use_avx512 {
+        let mr = if kind == MatmulKind::BF16F32 {
+            DimSize::try_from(AVX512_BF16_MR).unwrap()
+        } else {
+            nz!(8u32)
+        };
         main_per_target::<Avx512Target>(
             batch_size,
             m,
             k,
             n,
             avx512_v_n_size,
-            nz!(8u32),
+            mr,
             db_path,
             kind,
         );
@@ -270,6 +279,12 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
         let m_inner = spec_a.0.parameter_shape(0)[1].min(mr);
         let bf16f32 = is_bf16f32_matmul(spec_a);
         let avx2_bf16 = bf16f32 && Tgt::target_id() == TargetId::Avx2;
+        let avx512_bf16 = bf16f32 && Tgt::target_id() == TargetId::Avx512;
+        let (mc, kc, nc) = if avx512_bf16 {
+            (AVX512_BF16_MC, AVX512_BF16_KC, AVX512_BF16_NC)
+        } else {
+            (MC, KC, NC)
+        };
         let layout_a =
             if bf16f32 && !avx2_bf16 && spec_a.0.parameter_shape(0)[2].get().is_multiple_of(2) {
                 layout![0, 1, 2, 1 p(m_inner), 2 p(2)]
@@ -277,8 +292,8 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                 layout![0, 1, 2, 1 p(m_inner)]
             };
 
-        a.tile_out_ensure_continue(&[1, MC, n], |b| {
-            b.split_saturating_ensure_continue(KC, |c| {
+        a.tile_out_ensure_continue(&[1, mc, n], |b| {
+            b.split_saturating_ensure_continue(kc, |c| {
                 // TODO: move_relayout(0,..) does some redundant work here
                 let stripped_n = (n / v_n_size) * v_n_size.get(); // peels some off for Packed dim.
                 let c = if avx2_bf16 {
@@ -286,7 +301,7 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                 } else {
                     c.move_relayout(0, GL, layout_a.clone(), None)
                 };
-                c.tile_out_ensure_continue(&[1, MC, stripped_n], |d| {
+                c.tile_out_ensure_continue(&[1, mc, stripped_n], |d| {
                     let spec_d = spec_of(d);
                     let n_inner = spec_d.0.parameter_shape(1)[2].min(v_n_size);
                     let bf16f32 = is_bf16f32_matmul(spec_d);
@@ -300,7 +315,7 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                         layout![0, 2, 1, 2 p(n_inner)]
                     };
 
-                    d.tile_out_ensure_continue(&[1, MC, NC], |e| {
+                    d.tile_out_ensure_continue(&[1, mc, nc], |e| {
                         let spec_e = spec_of(&e);
                         let e = if avx2_bf16 {
                             e.clone()
@@ -346,12 +361,19 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                                 shape![1, mc_tile_size, 4],
                             ],
                             &|f| {
+                                let spec_f = spec_of(f);
+                                if is_bf16f32_matmul(spec_f)
+                                    && Tgt::target_id() == TargetId::Avx512
+                                    && spec_f.0.parameter_shape(2)[2] >= nz!(16u32)
+                                {
+                                    return Tgt::schedule_bf16_inner_tile(f, vec_size);
+                                }
+
                                 f.tile_out_ensure_continue(&[1, mr.get(), v_n_size.get()], |i| {
                                     let spec_i = spec_of(i);
-                                    let avx2_bf16_n_tail = is_bf16f32_matmul(spec_i)
-                                        && Tgt::target_id() == TargetId::Avx2
+                                    let bf16_scalar_n_tail = is_bf16f32_matmul(spec_i)
                                         && spec_i.0.parameter_shape(1)[2] < nz!(8u32);
-                                    if avx2_bf16_n_tail {
+                                    if bf16_scalar_n_tail {
                                         schedule_bf16_scalar_tail_tile(i)
                                     } else if spec_i.0.parameter_shape(1)[2] < nz!(4u32) {
                                         i.split(1)
@@ -388,11 +410,14 @@ trait Bf16InnerSchedule: CpuTarget {
     /// Applies the target-specific innermost BF16 matmul tiling before selecting a kernel.
     ///
     /// AVX2 keeps the scalar-K schedule for remainder tiles. AVX512 splits K to a
-    /// cache-sized leaf, moves packed A/B slices to L1, and tiles the output to a
-    /// small M block and up to two 16-lane N vectors so the selected `VDPBF16PS`
-    /// kernel has enough independent accumulator chains for Zen 5 while still
-    /// fitting in zmm registers.
-    fn schedule_bf16_inner_tile(matmul: &ImplNode<Self>, vector_width: DimSize) -> ImplNode<Self>;
+    /// cache-sized leaf, keeps the packed B panel in L1 across the M microtiles,
+    /// and tiles the output to an M block by up to two 16-lane N vectors so the
+    /// selected `VDPBF16PS` kernel has enough independent accumulator chains for
+    /// Zen 5 while still fitting in zmm registers.
+    fn schedule_bf16_inner_tile(
+        matmul: &ImplNode<Self>,
+        vector_width: DimSize,
+    ) -> ImplNode<Self>;
 }
 
 impl Bf16InnerSchedule for Avx2Target {
@@ -412,19 +437,28 @@ impl Bf16InnerSchedule for Avx512Target {
         }
 
         let spec = spec_of(matmul);
-        let m_block = spec.0.parameter_shape(0)[1].min(nz!(6u32));
-        matmul.tile_out_ensure_continue(&[1, m_block.get(), vector_width.get() * 2], |m_tile| {
-            m_tile
-                .move_vrf(2, VRF, vector_width.get())
-                .split_saturating_ensure_continue(AVX512_BF16_L1_KC, |k_tile| {
-                    let spec = spec_of(k_tile);
-                    let mut scheduled = k_tile.clone();
+        let m_block = spec.0.parameter_shape(2)[1]
+            .min(DimSize::try_from(AVX512_BF16_MR).unwrap());
+        let full_m = spec.0.parameter_shape(2)[1].get();
+        let n_block = spec.0.parameter_shape(2)[2].min(nz!(32u32));
+        matmul.tile_out_ensure_continue(&[1, full_m, n_block.get()], |n_tile| {
+            n_tile.split_saturating_ensure_continue(AVX512_BF16_L1_KC, |k_tile| {
+                let spec = spec_of(k_tile);
+                let mut k_panel = k_tile.clone();
+                if spec.0.parameter(1).memory() != L1 {
+                    k_panel = k_panel.move_param(1, L1);
+                }
+
+                k_panel.tile_out_ensure_continue(&[1, m_block.get(), n_block.get()], |micro_tile| {
+                    let spec = spec_of(micro_tile);
+                    let mut scheduled = micro_tile.clone();
+                    if spec.0.parameter(2).memory() != VRF {
+                        scheduled = scheduled.move_vrf(2, VRF, vector_width.get());
+                    }
                     if spec.0.parameter(0).memory() != L1 {
                         scheduled = scheduled.move_param(0, L1);
                     }
-                    if spec.0.parameter(1).memory() != L1 {
-                        scheduled = scheduled.move_param(1, L1);
-                    }
+
                     if spec.0.parameter_shape(0)[2].get().is_multiple_of(2) {
                         scheduled.select(Avx512Kernel::MatmulLoopVdpbf16ps)
                     } else {
@@ -435,6 +469,7 @@ impl Bf16InnerSchedule for Avx512Target {
                         )
                     }
                 })
+            })
         })
     }
 }
@@ -563,12 +598,7 @@ fn apply_rewrites<Tgt: CpuTarget>(implementation: ImplNode<Tgt>) -> ImplNode<Tgt
         }
 
         let output_idx = spec.0.unique_output_index().unwrap();
-        let new_tile_shape: Vec<u32> = spec
-            .0
-            .parameter_shape(output_idx)
-            .iter()
-            .map(|o| prev_power_of_two_u32(o.get().min(16)))
-            .collect();
+        let new_tile_shape = valid_small_move_tile_shape(spec, output_idx);
         let mut new_impl = implementation.tile_out_ensure(&new_tile_shape);
         let mut changed = false;
         if new_impl.spec().unwrap().0.parameter_shape(output_idx)
@@ -587,6 +617,51 @@ fn apply_rewrites<Tgt: CpuTarget>(implementation: ImplNode<Tgt>) -> ImplNode<Tgt
         }
         new_impl
     })
+}
+
+fn valid_small_move_tile_shape<Tgt: CpuTarget>(spec: &Spec<Tgt>, output_idx: usize) -> Vec<u32> {
+    let output = spec.0.parameter(output_idx);
+    let shape = output.shape();
+    let candidate_sizes: Vec<Vec<u32>> = shape
+        .iter()
+        .map(|d| {
+            let max_size = d.get().min(16);
+            let preferred = prev_power_of_two_u32(max_size);
+            let mut candidates = vec![preferred];
+            candidates.extend((1..=max_size).rev().filter(|&s| s != preferred));
+            candidates
+        })
+        .collect();
+
+    let mut chosen = Vec::with_capacity(shape.len());
+    find_valid_tile_shape(&output, &candidate_sizes, &mut chosen)
+        .expect("at least scalar tiling should apply to every move layout")
+}
+
+fn find_valid_tile_shape<Tgt: CpuTarget>(
+    output: &morello::tensorspec::TensorSpec<Tgt>,
+    candidate_sizes: &[Vec<u32>],
+    chosen: &mut Vec<u32>,
+) -> Option<Vec<u32>> {
+    if chosen.len() == candidate_sizes.len() {
+        let shape: Shape = chosen
+            .iter()
+            .map(|&d| DimSize::try_from(d).unwrap())
+            .collect();
+        return output
+            .is_valid_tile_shape(&shape, false)
+            .then(|| chosen.clone());
+    }
+
+    for &candidate in &candidate_sizes[chosen.len()] {
+        chosen.push(candidate);
+        if let Some(shape) = find_valid_tile_shape(output, candidate_sizes, chosen) {
+            return Some(shape);
+        }
+        chosen.pop();
+    }
+
+    None
 }
 
 fn chain_tile<Tgt, F>(imp: &ImplNode<Tgt>, shapes: &[Shape], inner_fn: &F) -> ImplNode<Tgt>
