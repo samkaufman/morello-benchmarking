@@ -372,6 +372,7 @@ fn schedule_matmul_serial<Tgt: Bf16InnerSchedule>(
                                 f.tile_out_ensure_continue(&[1, mr.get(), v_n_size.get()], |i| {
                                     let spec_i = spec_of(i);
                                     let bf16_scalar_n_tail = is_bf16f32_matmul(spec_i)
+                                        && Tgt::target_id() != TargetId::Avx512
                                         && spec_i.0.parameter_shape(1)[2] < nz!(8u32);
                                     if bf16_scalar_n_tail {
                                         schedule_bf16_scalar_tail_tile(i)
@@ -429,11 +430,7 @@ impl Bf16InnerSchedule for Avx2Target {
 impl Bf16InnerSchedule for Avx512Target {
     fn schedule_bf16_inner_tile(matmul: &ImplNode<Self>, vector_width: DimSize) -> ImplNode<Self> {
         if vector_width < nz!(16u32) {
-            return schedule_bf16_scalar_k_tile(
-                matmul,
-                vector_width,
-                Avx512Kernel::Cpu(CpuKernel::BroadcastVecMultAddBf16F32),
-            );
+            return schedule_avx512_bf16_n_tail_tile(matmul, vector_width);
         }
 
         let spec = spec_of(matmul);
@@ -471,6 +468,49 @@ impl Bf16InnerSchedule for Avx512Target {
                 })
             })
         })
+    }
+}
+
+fn schedule_avx512_bf16_n_tail_tile(
+    matmul: &ImplNode<Avx512Target>,
+    vector_width: DimSize,
+) -> ImplNode<Avx512Target> {
+    let k = spec_of(matmul).0.parameter_shape(0)[2].get();
+    let dot_product_k = (k.min(512) / 32) * 32;
+    if dot_product_k != 0 && dot_product_k < k {
+        matmul.split_saturating_ensure_continue(dot_product_k, |k_tile| {
+            schedule_avx512_bf16_n_tail_tile(k_tile, vector_width)
+        })
+    } else {
+        schedule_avx512_bf16_n_tail_k_tile(matmul, vector_width)
+    }
+}
+
+fn schedule_avx512_bf16_n_tail_k_tile(
+    matmul: &ImplNode<Avx512Target>,
+    vector_width: DimSize,
+) -> ImplNode<Avx512Target> {
+    let k = spec_of(matmul).0.parameter_shape(0)[2].get();
+    if k.is_multiple_of(32) {
+        let m = spec_of(matmul).0.parameter_shape(2)[1].get();
+        matmul.tile_out_ensure_continue(&[1, m, 1], |n_col_tile| {
+            n_col_tile
+                .move_relayout(1, L1, layout![0, 2, 1], None)
+                .tile_out_ensure_continue(&[1, 1, 1], |scalar_tile| {
+                    scalar_tile
+                        .move_relayout(0, L1, row_major, None)
+                        .move_param(2, RF)
+                        .select(Avx512Kernel::DotProductLoopVdpbf16ps)
+                })
+        })
+    } else if vector_width < nz!(8u32) {
+        schedule_bf16_scalar_tail_tile(matmul)
+    } else {
+        schedule_bf16_scalar_k_tile(
+            matmul,
+            vector_width,
+            Avx512Kernel::Cpu(CpuKernel::BroadcastVecMultAddBf16F32),
+        )
     }
 }
 
