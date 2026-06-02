@@ -28,7 +28,8 @@ const NC: u32 = 1056;
 const AVX512_BF16_MC: u32 = 2400;
 const AVX512_BF16_KC: u32 = 2400;
 const AVX512_BF16_NC: u32 = 2400;
-const AVX512_BF16_MR: u32 = 12;
+const AVX512_BF16_MR: u32 = 4;
+const AVX512_BF16_NR: u32 = 16;
 const AVX512_BF16_L1_KC: u32 = 336;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -437,7 +438,7 @@ impl Bf16InnerSchedule for Avx512Target {
         let m_block = spec.0.parameter_shape(2)[1]
             .min(DimSize::try_from(AVX512_BF16_MR).unwrap());
         let full_m = spec.0.parameter_shape(2)[1].get();
-        let n_block = spec.0.parameter_shape(2)[2].min(nz!(32u32));
+        let n_block = spec.0.parameter_shape(2)[2].min(DimSize::try_from(AVX512_BF16_NR).unwrap());
         matmul.tile_out_ensure_continue(&[1, full_m, n_block.get()], |n_tile| {
             n_tile.split_saturating_ensure_continue(AVX512_BF16_L1_KC, |k_tile| {
                 let spec = spec_of(k_tile);
