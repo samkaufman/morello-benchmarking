@@ -31,7 +31,9 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <new>
 
 #include "compression/compress.h"
@@ -54,6 +56,18 @@ struct timespec ts_diff(struct timespec start, struct timespec end) {
 }
 
 namespace gcpp {
+
+float RandomF32() {
+  uint32_t bits = 0x3f800000u | (static_cast<uint32_t>(rand()) & 0x007fffffu);
+  float value;
+  std::memcpy(&value, &bits, sizeof(bits));
+  return value;
+}
+
+hwy::bfloat16_t RandomBF16() {
+  return hwy::bfloat16_t::FromBits(
+      static_cast<uint16_t>(0x3f80u | (rand() & 0x007fu)));
+}
 
 template <class TConfig>
 struct Layer {
@@ -365,38 +379,28 @@ void DecodeLayer(size_t pos, size_t layer,
 
 template <class TConfig, size_t kBatchSize>
 void RandomizeActivations(Activations<TConfig, kBatchSize>* acts) {
-  std::default_random_engine gen;
-  std::uniform_real_distribution<float> dis_real32(0, 10);
-  std::uniform_int_distribution<int16_t> dis_int16(0, 10);
-
-  for (auto& x : acts->x) x = dis_real32(gen);
-  for (auto& x : acts->pre_att_rms_out) x = dis_real32(gen);
-  for (auto& x : acts->q) x = dis_real32(gen);
-  for (auto& x : acts->att) x = dis_real32(gen);
-  for (auto& x : acts->att_out) x = dis_real32(gen);
-  for (auto& x : acts->att_post1) x = dis_real32(gen);
-  for (auto& x : acts->att_post2) x = dis_real32(gen);
-  for (auto& x : acts->bf_pre_ffw_rms_out)
-    x = hwy::bfloat16_t::FromBits(dis_int16(gen));
-  for (auto& x : acts->ffw_hidden) x = dis_real32(gen);
-  for (auto& x : acts->ffw_out) x = dis_real32(gen);
+  for (auto& x : acts->x) x = RandomF32();
+  for (auto& x : acts->pre_att_rms_out) x = RandomF32();
+  for (auto& x : acts->q) x = RandomF32();
+  for (auto& x : acts->att) x = RandomF32();
+  for (auto& x : acts->att_out) x = RandomF32();
+  for (auto& x : acts->att_post1) x = RandomF32();
+  for (auto& x : acts->att_post2) x = RandomF32();
+  for (auto& x : acts->bf_pre_ffw_rms_out) x = RandomBF16();
+  for (auto& x : acts->ffw_hidden) x = RandomF32();
+  for (auto& x : acts->ffw_out) x = RandomF32();
 }
 
 
 template <size_t kCapacity>
 void RandomizeCompressedArrayBF16(CompressedArray<hwy::bfloat16_t, kCapacity> *arr) {
-  std::default_random_engine gen;
-  std::uniform_int_distribution<int16_t> dis_int16(0, 10);
   auto n = arr->NumElements();
   for (size_t i = 0; i < n; i++)
-    arr->data()[i] = hwy::bfloat16_t::FromBits(dis_int16(gen));
+    arr->data()[i] = RandomBF16();
 }
 
 template <class TConfig>
 void RandomizeCompressedWeights(CompressedWeights<TConfig> *c_weights) {
-  std::default_random_engine gen;
-  std::uniform_int_distribution<int16_t> dis_int16(0, 10);
-
   RandomizeCompressedArrayBF16(&c_weights->c_embedder_input_embedding);
   RandomizeCompressedArrayBF16(&c_weights->c_final_norm_scale);
 

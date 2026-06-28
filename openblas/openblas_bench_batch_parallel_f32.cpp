@@ -1,14 +1,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <chrono>
-#include <random>
 #include <iostream>
 #include <omp.h>
 #include <cblas.h>
 
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
+
+float random_f32() {
+    uint32_t bits = 0x3f800000u | ((uint32_t)rand() & 0x007fffffu);
+    float value;
+    memcpy(&value, &bits, sizeof(bits));
+    return value;
+}
 
 __attribute__((noinline))
 void kernel(float *a, float *b, float *c, int m, int n, int k) {
@@ -53,10 +60,6 @@ int main(int argc, char* argv[]) {
     omp_set_num_threads(batch_size);
     openblas_set_num_threads(1);
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
-
     float **a_batch = new float*[batch_size];
     float **b_batch = new float*[batch_size];
     float **c_batch = new float*[batch_size];
@@ -76,10 +79,10 @@ int main(int argc, char* argv[]) {
         
         // Initialize with random values
         for (int j = 0; j < m * k; ++j) {
-            a_batch[i][j] = distribution(generator);
+            a_batch[i][j] = random_f32();
         }
         for (int j = 0; j < n * k; ++j) {
-            b_batch[i][j] = distribution(generator);
+            b_batch[i][j] = random_f32();
         }
     }
 

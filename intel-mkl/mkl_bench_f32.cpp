@@ -1,13 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <chrono>
-#include <random>
 #include <iostream>
 #include "mkl_cblas.h"
 
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
+
+float random_f32() {
+    uint32_t bits = 0x3f800000u | ((uint32_t)rand() & 0x007fffffu);
+    float value;
+    memcpy(&value, &bits, sizeof(bits));
+    return value;
+}
 
 __attribute__((noinline))
 void kernel(float *a, float *b, float *c, MKL_INT m, MKL_INT n, MKL_INT k) {
@@ -39,10 +46,6 @@ int main(int argc, char* argv[]) {
     }
     const int inner_steps = std::stoi(inner_steps_env);
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
-
     float *a;
     float *b;
     float *c;
@@ -59,10 +62,10 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
     for (int i = 0; i < m * k; ++i) {
-        a[i] = distribution(generator);
+        a[i] = random_f32();
     }
     for (int i = 0; i < n * k; ++i) {
-        b[i] = distribution(generator);
+        b[i] = random_f32();
     }
 
     kernel(a, b, c, m, n, k);  // Warm-up

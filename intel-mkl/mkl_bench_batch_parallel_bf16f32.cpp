@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <chrono>
-#include <random>
 #include <iostream>
 #include <omp.h>
 #include "mkl.h"
@@ -11,11 +10,8 @@
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
 
-MKL_BF16 float_to_bf16(float value) {
-    uint32_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    uint32_t lsb = (bits >> 16) & 1;
-    return static_cast<MKL_BF16>((bits + 0x7fff + lsb) >> 16);
+MKL_BF16 random_bf16() {
+    return static_cast<MKL_BF16>(0x3f80u | (rand() & 0x007fu));
 }
 
 __attribute__((noinline))
@@ -62,10 +58,6 @@ int main(int argc, char* argv[]) {
     // Set number of OpenMP threads to match batch size
     omp_set_num_threads(batch_size);
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
-
     // Allocate arrays for each batch
     MKL_BF16 **a_batch = new MKL_BF16*[batch_size];
     MKL_BF16 **b_batch = new MKL_BF16*[batch_size];
@@ -87,10 +79,10 @@ int main(int argc, char* argv[]) {
 
         // Initialize with random values
         for (int j = 0; j < m * k; ++j) {
-            a_batch[i][j] = float_to_bf16(distribution(generator));
+            a_batch[i][j] = random_bf16();
         }
         for (int j = 0; j < n * k; ++j) {
-            b_batch[i][j] = float_to_bf16(distribution(generator));
+            b_batch[i][j] = random_bf16();
         }
     }
 

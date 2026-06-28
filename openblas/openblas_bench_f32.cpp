@@ -1,13 +1,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <chrono>
-#include <random>
 #include <iostream>
 #include <cblas.h>
 
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
+
+float random_f32() {
+    uint32_t bits = 0x3f800000u | ((uint32_t)rand() & 0x007fffffu);
+    float value;
+    memcpy(&value, &bits, sizeof(bits));
+    return value;
+}
 
 __attribute__((noinline))
 void kernel(float *a, float *b, float *c, int m, int n, int k) {
@@ -42,10 +49,6 @@ int main(int argc, char* argv[]) {
 
     openblas_set_num_threads(1);
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
-
     // Allocate matrices and fill with random data
     float *a, *b, *c;
     if (posix_memalign((void **)&a, 128, sizeof(float) * m * k) != 0) {
@@ -61,10 +64,10 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
     for (int i = 0; i < m * k; ++i) {
-        a[i] = distribution(generator);
+        a[i] = random_f32();
     }
     for (int i = 0; i < n * k; ++i) {
-        b[i] = distribution(generator);
+        b[i] = random_f32();
     }
 
     // Benchmark

@@ -1,11 +1,19 @@
 #include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
 
 #include <chrono>
 #include <iostream>
-#include <random>
 
 #include <pthreadpool.h>
 #include <xnnpack.h>
+
+float random_f32() {
+    uint32_t bits = 0x3f800000u | ((uint32_t)rand() & 0x007fffffu);
+    float value;
+    memcpy(&value, &bits, sizeof(bits));
+    return value;
+}
 
 __attribute__((noinline))
 void kernel(xnn_operator_t softmax_op, pthreadpool_t threadpool) {
@@ -47,11 +55,8 @@ int main(int argc, char* argv[]) {
         exit(1);
     }
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
     for (size_t i = 0; i < elements; ++i) {
-        input[i] = distribution(generator);
+        input[i] = random_f32();
     }
 
     pthreadpool_t threadpool = nullptr;

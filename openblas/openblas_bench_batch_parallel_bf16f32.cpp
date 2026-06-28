@@ -3,7 +3,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <chrono>
-#include <random>
 #include <iostream>
 #include <omp.h>
 #include <cblas.h>
@@ -11,11 +10,8 @@
 constexpr float alpha = 1.0f;
 constexpr float beta = 1.0f;
 
-bfloat16 float_to_bf16(float value) {
-    uint32_t bits;
-    memcpy(&bits, &value, sizeof(bits));
-    uint32_t lsb = (bits >> 16) & 1;
-    return static_cast<bfloat16>((bits + 0x7fff + lsb) >> 16);
+bfloat16 random_bf16() {
+    return static_cast<bfloat16>(0x3f80u | (rand() & 0x007fu));
 }
 
 __attribute__((noinline))
@@ -62,10 +58,6 @@ int main(int argc, char* argv[]) {
     omp_set_num_threads(batch_size);
     openblas_set_num_threads(1);
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_real_distribution<float> distribution(-1.0f, 1.0f);
-
     bfloat16 **a_batch = new bfloat16*[batch_size];
     bfloat16 **b_batch = new bfloat16*[batch_size];
     float **c_batch = new float*[batch_size];
@@ -85,10 +77,10 @@ int main(int argc, char* argv[]) {
 
         // Initialize with random values.
         for (int j = 0; j < m * k; ++j) {
-            a_batch[i][j] = float_to_bf16(distribution(generator));
+            a_batch[i][j] = random_bf16();
         }
         for (int j = 0; j < n * k; ++j) {
-            b_batch[i][j] = float_to_bf16(distribution(generator));
+            b_batch[i][j] = random_bf16();
         }
     }
 

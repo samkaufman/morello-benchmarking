@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 DTYPE = torch.float32
 
 
+def rand_f32(*shape: int) -> torch.Tensor:
+    bits = torch.randint(0, 0x00800000, shape, dtype=torch.int32)
+    bits = torch.bitwise_or(bits, 0x3F800000)
+    return bits.view(DTYPE)
+
+
 def configure_threads(num_threads: int) -> None:
     os.environ["OMP_NUM_THREADS"] = str(num_threads)
     os.environ["MKL_NUM_THREADS"] = str(num_threads)
@@ -104,7 +110,7 @@ def main():
                 "softmax-f32 requires 3 arguments: <batch_size> <length> <num_threads>"
             )
         batch_size, length, num_threads = (int(arg) for arg in args.args)
-        input_tensor = torch.rand(batch_size, length, dtype=DTYPE)
+        input_tensor = rand_f32(batch_size, length)
         run_compiled_loop(
             softmax_compiled_loop,
             input_tensor,
@@ -114,9 +120,9 @@ def main():
         if len(args.args) != 1:
             raise SystemExit("matmul2-f32 requires 1 argument: <size>")
         size = int(args.args[0])
-        a = torch.rand(size, size, dtype=DTYPE)
-        b = torch.rand(size, size, dtype=DTYPE)
-        c = torch.rand(size, size, dtype=DTYPE)
+        a = rand_f32(size, size)
+        b = rand_f32(size, size)
+        c = rand_f32(size, size)
         run_compiled_loop(matmul_chain_compiled_loop, a, b, c, num_threads=1)
     else:
         raise SystemExit(
