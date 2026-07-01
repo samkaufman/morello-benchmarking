@@ -30,9 +30,8 @@ RUN git checkout $MORELLO_VERSION && \
 RUN sed -i 's/^fn apply_to_leaf_spec/pub fn apply_to_leaf_spec/' morello/src/scheduling_sugar.rs && \
     cargo build --release --no-default-features
 
-COPY ./matmul_x86_parameterized.rs ./softmax_3pass_synth.rs morello/examples/
+COPY ./matmul_x86_parameterized.rs morello/examples/
 
-RUN cargo build --release --no-default-features --example matmul_x86_parameterized && \
-    cargo build --release --no-default-features --example softmax_3pass_synth
+RUN cargo build --release --no-default-features --example matmul_x86_parameterized
 ENV CLANG=/usr/bin/clang-18
 COPY ./run_bench.sh ./run_morello_example.sh /

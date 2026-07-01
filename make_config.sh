@@ -33,8 +33,8 @@ declare -a SMALL_PARALLEL_FACTORS=(1 "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORE
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 declare -a power_of_two_sizes=(64 128 256 512 1024)
-declare -a softmax_batch_sizes=(1 2 4 8 16 32 64 128 256)
-declare -a softmax_lengths=(256 512 1024 2048 4096)
+declare -a softmax_batch_sizes=(1 2 4 8 16 32)
+declare -a softmax_lengths=(512 1024 2048 4096 8192 16384 32768 65536 131072 262144 524288)
 mapfile -t softmax_num_cores < <(printf "%s\n" 1 "$(( PHYSICAL_CORES / 4 ))" "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORES" | sort -un)
 
 # Function to calculate GFLOPS for f32 matrix multiplication
@@ -246,15 +246,10 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo 'backend_name = "morello"'
     echo 'docker_path = "./morello"'
     echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-    if [ "$num_cores" -gt 1 ]; then
-        parallel_args='"--parallel", '
-    else
-        parallel_args=''
-    fi
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", ${parallel_args}\"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$length\" ]"
+        echo "command = [ \"/run_bench.sh\", \"$num_cores\", \"avx512\", \"/cherrybench/morello_avx512_db\", \"softmax\", \"$length\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"softmax_3pass_synth\", ${parallel_args}\"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$length\" ]"
+        echo "command = [ \"/run_bench.sh\", \"$num_cores\", \"avx2\", \"/cherrybench/morello_nonavx512_db\", \"softmax\", \"$length\" ]"
     fi
     echo "num_cores = $num_cores"
     echo ""
