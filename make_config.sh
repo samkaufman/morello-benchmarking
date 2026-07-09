@@ -33,9 +33,9 @@ declare -a SMALL_PARALLEL_FACTORS=(1 "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORE
 declare -a matmul_oneoff_sizes=("64" "128")
 declare -a matmul_chain_sizes=("64" "128" "256" "512" "1024")
 declare -a power_of_two_sizes=(64 128 256 512 1024)
-declare -a softmax_batch_sizes=(1 2 4 8 16 32)
+declare -a softmax_batch_sizes=(1 8 32)
 declare -a softmax_lengths=(512 1024 2048 4096 8192 16384 32768 65536 131072 262144 524288)
-mapfile -t softmax_num_cores < <(printf "%s\n" 1 "$(( PHYSICAL_CORES / 4 ))" "$(( PHYSICAL_CORES / 2 ))" "$PHYSICAL_CORES" | sort -un)
+mapfile -t softmax_num_cores < <(printf "%s\n" 1 "$PHYSICAL_CORES" | sort -un)
 
 # Function to calculate GFLOPS for f32 matrix multiplication
 # Formula: 2 * M * K * N / 1,000,000,000
