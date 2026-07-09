@@ -27,11 +27,26 @@ RUN git clone https://github.com/samkaufman/morello.git
 WORKDIR /morello
 RUN git checkout $MORELLO_VERSION && \
     git submodule update --init --recursive
+ARG MORELLO_FEATURES=""
 RUN sed -i 's/^fn apply_to_leaf_spec/pub fn apply_to_leaf_spec/' morello/src/scheduling_sugar.rs && \
-    cargo build --release --no-default-features
+    if [ -n "$MORELLO_FEATURES" ]; then \
+        dependency_features=""; \
+        for feature in $MORELLO_FEATURES; do \
+            dependency_features="${dependency_features:+$dependency_features }morello/$feature"; \
+        done; \
+        cargo build --release -p frontend --no-default-features --features "$dependency_features"; \
+    else \
+        cargo build --release -p frontend --no-default-features; \
+    fi
 
-COPY ./matmul_x86_parameterized.rs morello/examples/
+COPY ./matmul_x86_parameterized.rs ./softmax_synth.rs morello/examples/
 
-RUN cargo build --release --no-default-features --example matmul_x86_parameterized
+RUN if [ -n "$MORELLO_FEATURES" ]; then \
+        cargo build --release -p morello --no-default-features --features "$MORELLO_FEATURES" --example matmul_x86_parameterized && \
+        cargo build --release -p morello --no-default-features --features "$MORELLO_FEATURES" --example softmax_synth; \
+    else \
+        cargo build --release -p morello --no-default-features --example matmul_x86_parameterized && \
+        cargo build --release -p morello --no-default-features --example softmax_synth; \
+    fi
 ENV CLANG=/usr/bin/clang-18
 COPY ./run_bench.sh ./run_morello_example.sh /

@@ -200,6 +200,59 @@ emit_openblas_bf16f32_baseline() {
     echo ""
 }
 
+morello_db_path() {
+    local extra_features="$1"
+    local suffix
+    suffix=""
+    if [ -n "$extra_features" ]; then
+        suffix="${extra_features//-/_}"
+        suffix="_${suffix// /_}"
+    fi
+    if [ "$USE_AVX512" = true ]; then
+        echo "/cherrybench/morello_avx512${suffix}_db"
+    else
+        echo "/cherrybench/morello_nonavx512${suffix}_db"
+    fi
+}
+
+emit_morello_docker_build_args() {
+    local features="$1"
+    if [ -n "$features" ]; then
+        echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\", MORELLO_FEATURES = \"$features\" }"
+    else
+        echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    fi
+}
+
+# Args: batch length num_cores gflops variant_name morello_feature
+emit_morello_softmax() {
+    local batch_size="$1" length="$2" num_cores="$3" gflops_value="$4"
+    local variant_name="$5" morello_feature="$6"
+    local db_path name_suffix="${variant_name:+-$variant_name}" parallel_args
+
+    echo '[[jobs]]'
+    echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}${name_suffix}\""
+    echo "size = $length"
+    echo "batch_size = $batch_size"
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "morello"'
+    echo 'docker_path = "./morello"'
+    emit_morello_docker_build_args "$morello_feature"
+    db_path=$(morello_db_path "$morello_feature")
+    if [ "$num_cores" -gt 1 ]; then
+        parallel_args='"--parallel", '
+    else
+        parallel_args=''
+    fi
+    if [ "$USE_AVX512" = true ]; then
+        echo "command = [ \"/run_morello_example.sh\", \"softmax_synth\", ${parallel_args}\"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$length\" ]"
+    else
+        echo "command = [ \"/run_morello_example.sh\", \"softmax_synth\", ${parallel_args}\"--db\", \"$db_path\", \"$batch_size\", \"$length\" ]"
+    fi
+    echo "num_cores = $num_cores"
+    echo ""
+}
+
 echo '[[jobs]]'
 echo 'name = "gemma-decode-2b"'
 echo "size = 1"
@@ -213,9 +266,6 @@ for batch_size in "${softmax_batch_sizes[@]}"; do
 for length in "${softmax_lengths[@]}"; do
 gflops_value=$(calculate_softmax_gflops "$batch_size" "$length")
 for num_cores in "${softmax_num_cores[@]}"; do
-    if [ "$batch_size" -lt "$num_cores" ]; then
-        continue
-    fi
     echo '[[jobs]]'
     echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
     echo "size = $length"
@@ -238,21 +288,12 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo "num_cores = $num_cores"
     echo ""
 
-    echo '[[jobs]]'
-    echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
-    echo "size = $length"
-    echo "batch_size = $batch_size"
-    echo "gflops = $gflops_value"
-    echo 'backend_name = "morello"'
-    echo 'docker_path = "./morello"'
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-    if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_bench.sh\", \"$num_cores\", \"avx512\", \"/cherrybench/morello_avx512_db\", \"softmax\", \"$length\" ]"
-    else
-        echo "command = [ \"/run_bench.sh\", \"$num_cores\", \"avx2\", \"/cherrybench/morello_nonavx512_db\", \"softmax\", \"$length\" ]"
-    fi
-    echo "num_cores = $num_cores"
-    echo ""
+    emit_morello_softmax "$batch_size" "$length" "$num_cores" "$gflops_value" \
+        "" ""
+    emit_morello_softmax "$batch_size" "$length" "$num_cores" "$gflops_value" \
+        "offline-only" "softmax-disable-online-rewrites"
+    emit_morello_softmax "$batch_size" "$length" "$num_cores" "$gflops_value" \
+        "online-only" "softmax-disable-offline-rewrites"
 done
 done
 done
@@ -299,11 +340,12 @@ for n in "${sizes[@]}"; do
     echo "gflops = $gflops_value"
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    emit_morello_docker_build_args ""
+    db_path=$(morello_db_path "")
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     fi
     echo ""
 
@@ -314,11 +356,12 @@ for n in "${sizes[@]}"; do
     echo "gflops = $gflops_value"
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    emit_morello_docker_build_args ""
+    db_path=$(morello_db_path "")
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     fi
     echo ""
 
@@ -329,11 +372,12 @@ for n in "${sizes[@]}"; do
     echo "gflops = $gflops_value"
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    emit_morello_docker_build_args ""
+    db_path=$(morello_db_path "")
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--avx512\", \"--db\", \"/cherrybench/morello_avx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--db\", \"/cherrybench/morello_nonavx512_db\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     fi
     echo ""
 
@@ -365,11 +409,12 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo "gflops = $gflops_value"
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    emit_morello_docker_build_args ""
+    db_path=$(morello_db_path "")
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--avx512\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     fi
     echo ""
 
@@ -380,11 +425,12 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo "gflops = $gflops_value"
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    emit_morello_docker_build_args ""
+    db_path=$(morello_db_path "")
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--avx512\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     fi
     echo ""
 
@@ -395,11 +441,12 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo "gflops = $gflops_value"
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
-    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
+    emit_morello_docker_build_args ""
+    db_path=$(morello_db_path "")
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--avx512\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     fi
     echo ""
 
@@ -467,7 +514,9 @@ echo "command = [ \"matmul2-f32\", \"$i\" ]"
 echo ""
 done
 
-echo '[reporters.google_sheets]'
-echo "key_file = \"${MORELLO_SECRETS_KEY_PATH}\""
-echo 'sheet_name = "Morello Performance Benchmarks"'
-echo 'folder_name = "BETA"'
+if [ "${DISABLE_REMOTE_REPORTING:-false}" != true ]; then
+    echo '[reporters.google_sheets]'
+    echo "key_file = \"${MORELLO_SECRETS_KEY_PATH}\""
+    echo 'sheet_name = "Morello Performance Benchmarks"'
+    echo 'folder_name = "BETA"'
+fi
