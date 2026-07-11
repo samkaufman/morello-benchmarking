@@ -33,9 +33,4 @@ if ! [[ "$NUM_CORES" =~ ^[0-9]+$ ]] || [ "$NUM_CORES" -lt 1 ]; then
     exit 1
 fi
 
-if [ "$NUM_CORES" -gt "$BATCH_SIZE" ]; then
-    echo "Error: num_cores must be less than or equal to batch_size"
-    exit 1
-fi
-
 exec "$SCRIPT_DIR/xnnpack_softmax_bench" "$BATCH_SIZE" "$CHANNELS" "$NUM_CORES"
