@@ -245,9 +245,9 @@ emit_morello_softmax() {
         parallel_args=''
     fi
     if [ "$USE_AVX512" = true ]; then
-        echo "command = [ \"/run_morello_example.sh\", \"softmax_synth\", ${parallel_args}\"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$length\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"--thread-limit\", \"$num_cores\", \"softmax_synth\", ${parallel_args}\"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$length\" ]"
     else
-        echo "command = [ \"/run_morello_example.sh\", \"softmax_synth\", ${parallel_args}\"--db\", \"$db_path\", \"$batch_size\", \"$length\" ]"
+        echo "command = [ \"/run_morello_example.sh\", \"--thread-limit\", \"$num_cores\", \"softmax_synth\", ${parallel_args}\"--db\", \"$db_path\", \"$batch_size\", \"$length\" ]"
     fi
     echo "num_cores = $num_cores"
     echo ""

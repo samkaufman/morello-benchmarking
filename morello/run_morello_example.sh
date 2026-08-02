@@ -1,8 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+    echo "Usage: $0 [--thread-limit <threads>] <example_name> [example args...]" >&2
+}
+
+if [ "${1:-}" = "--thread-limit" ]; then
+    if [ "$#" -lt 2 ] || ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
+        echo "Error: --thread-limit requires a positive integer." >&2
+        usage
+        exit 2
+    fi
+
+    # Generated loops may specify num_threads explicitly, so enforce the hard OpenMP limit.
+    export OMP_THREAD_LIMIT="$2"
+    shift 2
+fi
+
 if [ "$#" -lt 1 ]; then
-    echo "Usage: $0 <example_name> [example args...]" >&2
+    usage
     exit 2
 fi
 
