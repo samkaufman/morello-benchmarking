@@ -34,6 +34,7 @@ struct Args {
     seq_len: NonZeroU32,
     parallel: bool,
     avx512: bool,
+    emit_benchmark_c: bool,
 }
 
 /// Extends [ImplNode] with the `try_synthesize_all` method.
@@ -78,7 +79,9 @@ impl<Tgt: Target> TrySynthesizeAll<Tgt> for ImplNode<Tgt> {
 }
 
 fn usage(program_name: &str) -> String {
-    format!("Usage: {program_name} [--db <path>] [--parallel] [--avx512] <batch_size> <seq_len>")
+    format!(
+        "Usage: {program_name} [--db <path>] [--parallel] [--avx512] [--emit-benchmark-c] <batch_size> <seq_len>"
+    )
 }
 
 fn parse_args() -> Args {
@@ -89,6 +92,7 @@ fn parse_args() -> Args {
 
     let mut parallel = false;
     let mut avx512 = false;
+    let mut emit_benchmark_c = false;
     let mut integer_args = vec![];
     let mut db = None;
 
@@ -99,6 +103,10 @@ fn parse_args() -> Args {
         }
         if arg == "--avx512" {
             avx512 = true;
+            continue;
+        }
+        if arg == "--emit-benchmark-c" {
+            emit_benchmark_c = true;
             continue;
         }
         if arg == "--db" {
@@ -141,6 +149,7 @@ fn parse_args() -> Args {
         seq_len,
         parallel,
         avx512,
+        emit_benchmark_c,
     }
 }
 
@@ -164,15 +173,9 @@ where
     Tgt::actions(&leaf.0)
         .filter_map(|action| {
             let action_enabled = match &action {
-                Action::ToSoftmaxParts(a) => {
-                    !cfg!(feature = "softmax-disable-offline-rewrites")
-                        && a.denominator_layout.is_row_major()
-                        && a.exps_layout.is_row_major()
-                }
+                Action::ToSoftmaxParts(a) => a.denominator_layout.is_row_major(),
                 Action::ToSoftmaxPartsRecompute(a) => {
-                    !cfg!(feature = "softmax-disable-online-rewrites")
-                        && a.max_layout.is_row_major()
-                        && a.denominator_layout.is_row_major()
+                    a.max_layout.is_row_major() && a.denominator_layout.is_row_major()
                 }
                 _ => false,
             };
@@ -273,6 +276,15 @@ where
                 panic!("Failed to build generated code: {e}");
             }
         }
+    }
+
+    if args.emit_benchmark_c {
+        let mut source = String::new();
+        implementation
+            .emit(true, None, &mut source)
+            .unwrap_or_else(|e| panic!("Failed to generate benchmark code: {e}"));
+        print!("{source}");
+        return;
     }
 
     // Benchmark.
