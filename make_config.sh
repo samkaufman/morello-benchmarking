@@ -238,7 +238,7 @@ emit_morello_softmax() {
     echo 'backend_name = "morello"'
     echo 'docker_path = "./morello"'
     emit_morello_docker_build_args "$morello_feature"
-    db_path=$(morello_db_path "$morello_feature")
+    db_path=$(morello_db_path "$morello_feature") # Softmax uses PowerOfTwo scaling.
     if [ "$num_cores" -gt 1 ]; then
         parallel_args='"--parallel", '
     else
@@ -341,7 +341,7 @@ for n in "${sizes[@]}"; do
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     emit_morello_docker_build_args ""
-    db_path=$(morello_db_path "")
+    db_path=$(morello_db_path "linear") # Matmul uses Linear scaling.
     if [ "$USE_AVX512" = true ]; then
         echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
@@ -357,7 +357,7 @@ for n in "${sizes[@]}"; do
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     emit_morello_docker_build_args ""
-    db_path=$(morello_db_path "")
+    db_path=$(morello_db_path "linear") # Matmul uses Linear scaling.
     if [ "$USE_AVX512" = true ]; then
         echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
@@ -373,7 +373,7 @@ for n in "${sizes[@]}"; do
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     emit_morello_docker_build_args ""
-    db_path=$(morello_db_path "")
+    db_path=$(morello_db_path "linear") # Matmul uses Linear scaling.
     if [ "$USE_AVX512" = true ]; then
         echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"$n\", \"$n\", \"$n\" ]"
     else
@@ -410,7 +410,7 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     emit_morello_docker_build_args ""
-    db_path=$(morello_db_path "")
+    db_path=$(morello_db_path "linear") # Matmul uses Linear scaling.
     if [ "$USE_AVX512" = true ]; then
         echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     else
@@ -426,7 +426,7 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     emit_morello_docker_build_args ""
-    db_path=$(morello_db_path "")
+    db_path=$(morello_db_path "linear") # Matmul uses Linear scaling.
     if [ "$USE_AVX512" = true ]; then
         echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"i32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     else
@@ -442,7 +442,7 @@ for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 )
     echo "backend_name = \"morello\""
     echo "docker_path = \"./morello\""
     emit_morello_docker_build_args ""
-    db_path=$(morello_db_path "")
+    db_path=$(morello_db_path "linear") # Matmul uses Linear scaling.
     if [ "$USE_AVX512" = true ]; then
         echo "command = [ \"/run_morello_example.sh\", \"matmul_x86_parameterized\", \"bf16f32\", \"--avx512\", \"--db\", \"$db_path\", \"$batch_size\", \"2048\", \"2048\", \"2048\" ]"
     else
