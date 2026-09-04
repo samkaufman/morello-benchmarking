@@ -22,6 +22,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Temporarily disable the MetaSchedule-tuned TVM jobs (backend
+# "metaschedule"). The out-of-the-box "tvm" jobs are unaffected.
+ENABLE_TVM_METASCHEDULE=false
+
 PHYSICAL_CORES=$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | wc -l | tr -d '[:space:]')
 if ! [[ "$PHYSICAL_CORES" =~ ^[0-9]+$ ]] || [ "$PHYSICAL_CORES" -lt 4 ]; then
     echo "Error: detected physical cores ('$PHYSICAL_CORES') is less than 4 or invalid." >&2
@@ -119,12 +123,15 @@ echo "order = \"random-new-first\""
 echo ""
 
 # Args: batch m k n
-emit_f32_backend_trio() {
+emit_f32_matmul_baselines() {
     local b="$1" m="$2" k="$3" n="$4"
     local gflops_value job_name
     gflops_value=$(calculate_gflops "$b" "$m" "$k" "$n")
     job_name="matmul-batch-parallel-f32-${b}x${m}x${k}x${n}"
-    for backend in intel-mkl aocl-4.2 openblas; do
+    for backend in intel-mkl aocl-4.2 openblas metaschedule tvm; do
+        if [ "$backend" = "metaschedule" ] && [ "$ENABLE_TVM_METASCHEDULE" != true ]; then
+            continue
+        fi
         echo '[[jobs]]'
         echo "name = \"${job_name}\""
         echo "size = $n"
@@ -135,11 +142,20 @@ emit_f32_backend_trio() {
             intel-mkl) echo 'docker_path = "./intel-mkl"' ;;
             aocl-4.2) echo 'docker_path = "./aocl"' ;;
             openblas) echo 'docker_path = "./openblas"' ;;
+            metaschedule|tvm) echo 'docker_path = "./tvm"' ;;
         esac
-        echo "command = [ \"batch-parallel-f32\", \"$b\", \"$m\", \"$k\", \"$n\" ]"
+        echo "command = [ \"batch-parallel-f32\", \"$b\", \"$m\", \"$k\", \"$n\"$(tvm_command_suffix "$backend") ]"
         echo "num_cores = $b"
         echo ""
     done
+}
+
+# Args: backend. Prints extra TOML command arguments for TVM backends.
+tvm_command_suffix() {
+    local backend="$1"
+    if [ "$backend" = "metaschedule" ]; then
+        printf '%s' ", \"--scheduling\", \"metaschedule\""
+    fi
 }
 
 # Args: batch m k n
@@ -288,6 +304,22 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo "num_cores = $num_cores"
     echo ""
 
+    for tvm_backend in metaschedule tvm; do
+        if [ "$tvm_backend" = "metaschedule" ] && [ "$ENABLE_TVM_METASCHEDULE" != true ]; then
+            continue
+        fi
+        echo '[[jobs]]'
+        echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
+        echo "size = $length"
+        echo "batch_size = $batch_size"
+        echo "gflops = $gflops_value"
+        echo "backend_name = \"$tvm_backend\""
+        echo 'docker_path = "./tvm"'
+        echo "command = [ \"softmax-f32\", \"$batch_size\", \"$length\", \"$num_cores\"$(tvm_command_suffix "$tvm_backend") ]"
+        echo "num_cores = $num_cores"
+        echo ""
+    done
+
     emit_morello_softmax "$batch_size" "$length" "$num_cores" "$gflops_value" \
         "" ""
     emit_morello_softmax "$batch_size" "$length" "$num_cores" "$gflops_value" \
@@ -330,7 +362,7 @@ for batch_size in "${SMALL_PARALLEL_FACTORS[@]}"; do
 mapfile -t seq_sizes < <(seq 100 100 4000)
 mapfile -t sizes < <(printf "%s\n" "${seq_sizes[@]}" "${powers_of_two[@]}" | sort -un)
 for n in "${sizes[@]}"; do
-    emit_f32_backend_trio "$batch_size" "$n" "$n" "$n"
+    emit_f32_matmul_baselines "$batch_size" "$n" "$n" "$n"
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-${batch_size}x${n}x${n}x${n}\""
@@ -399,7 +431,7 @@ done
 
 # Do 2048x2048x2048 at other parallelism factors
 for batch_size in $(seq 2 "$PHYSICAL_CORES" | sed -e "/^$(( PHYSICAL_CORES / 2 ))$/d" -e "/^$PHYSICAL_CORES$/d"); do
-    emit_f32_backend_trio "$batch_size" "2048" "2048" "2048"
+    emit_f32_matmul_baselines "$batch_size" "2048" "2048" "2048"
 
     echo '[[jobs]]'
     echo "name = \"matmul-batch-parallel-f32-${batch_size}x2048x2048x2048\""
@@ -467,7 +499,7 @@ done
 
 for mkn in "${mkn_u8s8s16_combinations[@]}"; do
 IFS=',' read -r m k n <<< "$mkn"
-    
+
 echo '[[jobs]]'
 echo "name = \"matmul-u8s8s16-${m}x${k}x${n}\""
 echo "size = $m"
@@ -497,7 +529,11 @@ for b in "tvm" "eigen"; do
         echo 'batch_size = 1'
         echo "backend_name = \"$b\""
         echo "docker_path = \"./$b\""
-        echo "command = [ \"$m\" ]"
+        if [ "$b" = "tvm" ]; then
+            echo "command = [ \"batch-parallel-u32\", \"1\", \"$m\", \"$k\", \"$n\" ]"
+        else
+            echo "command = [ \"$m\" ]"
+        fi
         echo ""
     fi
 done
