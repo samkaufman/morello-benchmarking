@@ -293,7 +293,44 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
 
     work_dir = cache_dir / "tuning"
     work_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("Tuning %s with MetaSchedule (%d trials)", cache_key, trials)
+
+    # MetaSchedule's LocalRunner measures each candidate `number` times (3 by
+    # default) and discards it after `timeout_sec` (30 s by default). The
+    # largest jobs here are ~2 TFLOP per call and allocate gigabytes of random
+    # inputs per measurement, so with the defaults every candidate times out
+    # and no schedule comes back. Measure once per candidate (`min_repeat_ms`
+    # still repeats tiny workloads until a sample is 100 ms long) and let the
+    # timeout grow with the work: a candidate may run as slowly as ~10 GFLOP/s
+    # before it is given up on.
+    estimated_flop = float(
+        tvm.tir.analysis.estimate_tir_flops(tvm.IRModule({"main": prim_func}))
+    )
+    measurement = {
+        "estimated_flop": estimated_flop,
+        "runner_timeout_sec": max(120.0, 2.0 * estimated_flop / 1e10 + 60.0),
+        "builder_timeout_sec": 120.0,
+        "evaluator_number": 1,
+        "evaluator_repeat": 1,
+        "evaluator_min_repeat_ms": 100,
+    }
+    runner = ms.runner.LocalRunner(
+        timeout_sec=measurement["runner_timeout_sec"],
+        evaluator_config=ms.runner.EvaluatorConfig(
+            number=measurement["evaluator_number"],
+            repeat=measurement["evaluator_repeat"],
+            min_repeat_ms=measurement["evaluator_min_repeat_ms"],
+            enable_cpu_cache_flush=False,
+        ),
+    )
+    builder = ms.builder.LocalBuilder(timeout_sec=measurement["builder_timeout_sec"])
+
+    logger.info(
+        "Tuning %s with MetaSchedule (%d trials, %.3g FLOP per call, runner timeout %g s)",
+        cache_key,
+        trials,
+        estimated_flop,
+        measurement["runner_timeout_sec"],
+    )
     with _stdout_to_stderr():
         tune_start = time.perf_counter()
         database = ms.tune_tir(
@@ -301,11 +338,17 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
             target=target,
             work_dir=str(work_dir),
             max_trials_global=trials,
+            builder=builder,
+            runner=runner,
         )
         tune_end = time.perf_counter()
         sch = ms.tir_integration.compile_tir(database, prim_func, target)
         if sch is None:
-            raise RuntimeError("MetaSchedule did not produce a schedule")
+            raise RuntimeError(
+                f"MetaSchedule did not produce a schedule for {cache_key}: no candidate "
+                f"was measured successfully within the runner timeout of "
+                f"{measurement['runner_timeout_sec']:g} s; see {work_dir}/logs"
+            )
         lib = tvm.build(sch.mod, target=target)
         compile_end = time.perf_counter()
 
@@ -318,6 +361,7 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
         tune_seconds=tune_end - tune_start,
         compile_seconds=compile_end - tune_end,
         tuned_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        **measurement,
     )
     try:
         records = database.get_all_tuning_records()
