@@ -4,6 +4,7 @@ import datetime
 import functools
 import json
 import logging
+import math
 import os
 import pathlib
 import sys
@@ -364,13 +365,15 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
         **measurement,
     )
     try:
-        records = database.get_all_tuning_records()
-        stats["trials_measured"] = len(records)
-        trial_means = [
-            sum(float(s) for s in record.run_secs) / len(record.run_secs)
-            for record in records
-            if record.run_secs
-        ]
+        # MetaSchedule keeps a record for every candidate it ran and marks a
+        # failed or timed-out measurement with a huge sentinel run time; count
+        # only the candidates that actually produced a measurement.
+        trial_means = []
+        for record in database.get_all_tuning_records():
+            secs = [float(s) for s in record.run_secs]
+            if secs and all(math.isfinite(s) and 0 < s < 1e9 for s in secs):
+                trial_means.append(sum(secs) / len(secs))
+        stats["trials_measured"] = len(trial_means)
         if trial_means:
             stats["best_trial_seconds"] = min(trial_means)
     except Exception as exc:  # Diagnostics only; never fail the benchmark.
