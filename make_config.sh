@@ -23,12 +23,18 @@ while [[ $# -gt 0 ]]; do
 done
 
 # MetaSchedule trial budget for every TVM job. TVM 0.20 has no untuned CPU
-# schedule for these ops (its unscheduled build is a scalar loop nest), so the
-# "tvm" backend is always MetaSchedule-tuned. Tuning runs before timing and is
-# never part of a sample; the job records it in build_stats.json
+# schedule for these ops (its unscheduled build is a scalar loop nest), so
+# TVM is always MetaSchedule-tuned here, and the budget is part of the backend
+# name the reporters see (see tvm_backend_name). Tuning runs before timing and
+# is never part of a sample; the job records it in build_stats.json
 # (tune_seconds, trials_measured, ...), which cherrybench uploads with the
 # job's output directory.
 TVM_TRIALS=128
+
+# The backend name reported for TVM jobs: MetaSchedule with this many trials.
+tvm_backend_name() {
+    printf 'metaschedule-trials%s' "$TVM_TRIALS"
+}
 
 PHYSICAL_CORES=$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | wc -l | tr -d '[:space:]')
 if ! [[ "$PHYSICAL_CORES" =~ ^[0-9]+$ ]] || [ "$PHYSICAL_CORES" -lt 4 ]; then
@@ -138,12 +144,11 @@ emit_f32_matmul_baselines() {
         echo "size = $n"
         echo "batch_size = $b"
         echo "gflops = $gflops_value"
-        echo "backend_name = \"$backend\""
         case $backend in
-            intel-mkl) echo 'docker_path = "./intel-mkl"' ;;
-            aocl-4.2) echo 'docker_path = "./aocl"' ;;
-            openblas) echo 'docker_path = "./openblas"' ;;
-            tvm) echo 'docker_path = "./tvm"' ;;
+            intel-mkl) echo "backend_name = \"$backend\""; echo 'docker_path = "./intel-mkl"' ;;
+            aocl-4.2) echo "backend_name = \"$backend\""; echo 'docker_path = "./aocl"' ;;
+            openblas) echo "backend_name = \"$backend\""; echo 'docker_path = "./openblas"' ;;
+            tvm) echo "backend_name = \"$(tvm_backend_name)\""; echo 'docker_path = "./tvm"' ;;
         esac
         echo "command = [ \"batch-parallel-f32\", \"$b\", \"$m\", \"$k\", \"$n\"$(tvm_command_suffix "$backend") ]"
         echo "num_cores = $b"
@@ -311,7 +316,7 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo "size = $length"
     echo "batch_size = $batch_size"
     echo "gflops = $gflops_value"
-    echo 'backend_name = "tvm"'
+    echo "backend_name = \"$(tvm_backend_name)\""
     echo 'docker_path = "./tvm"'
     echo "command = [ \"softmax-f32\", \"$batch_size\", \"$length\", \"$num_cores\"$(tvm_command_suffix tvm) ]"
     echo "num_cores = $num_cores"
@@ -524,7 +529,11 @@ for b in "tvm" "eigen"; do
         echo "name = \"matmul-u32-${m}x${k}x${n}\""
         echo "size = $m"
         echo 'batch_size = 1'
-        echo "backend_name = \"$b\""
+        if [ "$b" = "tvm" ]; then
+            echo "backend_name = \"$(tvm_backend_name)\""
+        else
+            echo "backend_name = \"$b\""
+        fi
         echo "docker_path = \"./$b\""
         if [ "$b" = "tvm" ]; then
             echo "command = [ \"batch-parallel-u32\", \"1\", \"$m\", \"$k\", \"$n\"$(tvm_command_suffix tvm) ]"
