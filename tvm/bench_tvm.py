@@ -1,3 +1,15 @@
+"""TVM baselines, tuned with MetaSchedule.
+
+Every workload is scheduled by MetaSchedule with the trial budget given on the
+command line; there is no untuned path (TVM 0.20 ships no CPU schedule for
+these ops, and its unscheduled build is a scalar loop nest that is not a
+meaningful baseline). Tuning happens before timing starts and is never part of
+a timing sample. Its cost is recorded in `build_stats.json` in the job's output
+directory (`tune_seconds`, `trials_requested`, `trials_measured`, ...), which
+cherrybench uploads alongside the result, and is also logged to stderr by every
+invocation, including ones that reuse a cached tuning.
+"""
+
 import argparse
 import contextlib
 import datetime
@@ -50,16 +62,10 @@ def main() -> None:
 
     for parser in (*matmul_parsers, softmax_parser):
         parser.add_argument(
-            "--scheduling",
-            choices=("relax", "metaschedule"),
-            default="relax",
-            help="relax: out-of-the-box Relax build; metaschedule: auto-tune",
-        )
-        parser.add_argument(
             "--trials",
             type=int,
             default=DEFAULT_TRIALS,
-            help="MetaSchedule tuning trials",
+            help="MetaSchedule tuning trials (make_config.sh passes this explicitly)",
         )
 
     args = arg_parser.parse_args()
@@ -72,17 +78,15 @@ def main() -> None:
 def run_batch_parallel_matmul(
     args: argparse.Namespace, dtype_name: str, dtype: str
 ) -> None:
-    from tvm import relax, topi
+    from tvm import topi
 
     b, m, k, n = args.batch_size, args.m, args.k, args.n
 
     _run_benchmark(
-        args.scheduling,
         args.trials,
         num_threads=args.num_threads,
         input_shapes=[(b, m, k), (b, k, n)],
         out_shape=(b, m, n),
-        relax_op=relax.op.matmul,
         topi_op=functools.partial(
             topi.nn.batch_matmul, transpose_a=False, transpose_b=False
         ),
@@ -92,17 +96,15 @@ def run_batch_parallel_matmul(
 
 
 def run_softmax_f32(args: argparse.Namespace) -> None:
-    from tvm import relax, topi
+    from tvm import topi
 
     batch, length = args.batch_size, args.length
 
     _run_benchmark(
-        args.scheduling,
         args.trials,
         num_threads=args.num_threads,
         input_shapes=[(batch, length)],
         out_shape=(batch, length),
-        relax_op=functools.partial(relax.op.nn.softmax, axis=-1),
         topi_op=functools.partial(topi.nn.softmax, axis=-1),
         workload_name=f"softmax-f32-{batch}x{length}",
         dtype="float32",
@@ -110,17 +112,15 @@ def run_softmax_f32(args: argparse.Namespace) -> None:
 
 
 def _run_benchmark(
-    scheduling: str,
     trials: int,
     num_threads: int,
     input_shapes: list[tuple[int, ...]],
     out_shape: tuple[int, ...],
-    relax_op: Callable,
     topi_op: Callable,
     workload_name: str,
     dtype: str,
 ) -> None:
-    """Runs a workload under the given scheduling mode."""
+    """Tunes, builds, and times a workload."""
     import tvm
 
     target = _host_target(num_cores=num_threads)
@@ -132,16 +132,11 @@ def _run_benchmark(
         for shape in input_shapes
     ]
 
-    if scheduling == "relax":
-        vm = _build_relax_vm(input_shapes, relax_op, target, dtype)
-        vm["main"](*inputs)  # Warm-up
-        _time_and_report(vm.module, device, *inputs)
-    else:
-        prim_func = _te_prim_func(input_shapes, topi_op, target, dtype=dtype)
-        lib = _build_tuned(workload_name, prim_func, target, trials)
-        out_nd = tvm.nd.empty(out_shape, dtype, device)
-        lib["main"](*inputs, out_nd)  # Warm-up
-        _time_and_report(lib, device, *inputs, out_nd)
+    prim_func = _te_prim_func(input_shapes, topi_op, target, dtype=dtype)
+    lib = _build_tuned(workload_name, prim_func, target, trials)
+    out_nd = tvm.nd.empty(out_shape, dtype, device)
+    lib["main"](*inputs, out_nd)  # Warm-up
+    _time_and_report(lib, device, *inputs, out_nd)
 
 
 def _random_input(
@@ -187,55 +182,6 @@ def _te_prim_func(
     return te.create_prim_func(placeholders + [out])
 
 
-def _build_relax_vm(
-    input_shapes: list[tuple[int, ...]],
-    op_builder: Callable,
-    target: str,
-    dtype: str,
-):
-    """Compiles a single-op model with TVM's out-of-the-box Relax pipeline.
-
-    No scheduling or tuning is applied beyond tvm.relax.build's standard
-    pipelines. Returns a Relax VirtualMachine whose "main" takes the input
-    tensors and returns the output tensor.
-    """
-    import tvm
-    from tvm import relax
-
-    bb = relax.BlockBuilder()
-    params = [
-        relax.Var(f"x{i}", relax.TensorStructInfo(shape, dtype))
-        for i, shape in enumerate(input_shapes)
-    ]
-    with bb.function("main", params):
-        out = bb.emit(op_builder(*params))
-        bb.emit_func_output(out)
-    mod = bb.get()
-
-    build_start = time.perf_counter()
-    with _stdout_to_stderr():
-        executable = tvm.relax.build(mod, target=target)
-    stats = _base_stats(target)
-    stats.update(
-        scheduling="relax", compile_seconds=time.perf_counter() - build_start
-    )
-    _write_output_file(STATS_FILENAME, json.dumps(stats, indent=2))
-
-    # Log the compiled module (Relax "main" plus generated TIR kernels). The
-    # lowering below re-runs most of the build, so skip it when an earlier
-    # invocation of this job already dumped it.
-    out_dir = _output_dir()
-    if out_dir is not None and not (out_dir / "tir.txt").exists():
-        try:
-            with _stdout_to_stderr(), tvm.target.Target(target):
-                lowered = relax.pipeline.default_build_pipeline()(mod)
-            _write_output_file("tir.txt", str(lowered))
-        except Exception as exc:  # Diagnostics only; never fail the benchmark.
-            logger.warning("Failed to dump lowered module: %s", exc)
-
-    return relax.VirtualMachine(executable, tvm.cpu(0))
-
-
 def _base_stats(target: str) -> dict[str, object]:
     import tvm
 
@@ -246,22 +192,23 @@ def _base_stats(target: str) -> dict[str, object]:
     }
 
 
-def _copy_cached_stats(stats_path: pathlib.Path) -> None:
+def _copy_cached_stats(stats_path: pathlib.Path) -> dict[str, object] | None:
     """Copies cached tuning stats into the job's output directory.
 
-    Skipped when the output directory already has stats: the invocation that
-    actually tuned shares that directory, and its record is the interesting
-    one.
+    Returns the cached stats. The copy is skipped when the output directory
+    already has stats: the invocation that actually tuned shares that
+    directory (cherrybench re-runs a job with growing loop counts), and its
+    record is the one to keep.
     """
-    out_dir = _output_dir()
-    if out_dir is None or not stats_path.exists():
-        return
-    dest = out_dir / STATS_FILENAME
-    if dest.exists():
-        return
+    if not stats_path.exists():
+        return None
     stats = json.loads(stats_path.read_text())
-    stats["cache_hit"] = True
-    dest.write_text(json.dumps(stats, indent=2))
+    out_dir = _output_dir()
+    if out_dir is not None and not (out_dir / STATS_FILENAME).exists():
+        copied = dict(stats)
+        copied["cache_hit"] = True
+        (out_dir / STATS_FILENAME).write_text(json.dumps(copied, indent=2))
+    return stats
 
 
 def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
@@ -271,6 +218,10 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
     skips tuning entirely. The cache key includes everything the artifact was
     specialized for — the workload, the host CPU (the cache may live on a
     mount shared between machines), thread count, and trial budget.
+
+    Tuning time is measured around `ms.tune_tir` alone, written to
+    `build_stats.json` both in the cache and in the job's output directory,
+    and logged; a cache hit logs the recorded time of the tuning it reuses.
     """
     import tvm
     from tvm import meta_schedule as ms
@@ -284,12 +235,21 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
     tir_path = cache_dir / "tir.txt"
     stats_path = cache_dir / STATS_FILENAME
     if lib_path.exists():
-        logger.info("Using cached tuned module: %s", lib_path)
+        cached = _copy_cached_stats(stats_path)
+        if cached is None:
+            logger.warning("Cached tuned module %s has no build stats", lib_path)
+        else:
+            logger.info(
+                "Using cached tuned module %s: tuned in %.1f s (%s of %s trials measured)",
+                lib_path,
+                cached.get("tune_seconds", float("nan")),
+                cached.get("trials_measured", "?"),
+                cached.get("trials_requested", "?"),
+            )
         if tir_path.exists():
             _write_output_file(
                 "tir.txt", tir_path.read_text(), skip_existing=True
             )
-        _copy_cached_stats(stats_path)
         return tvm.runtime.load_module(str(lib_path))
 
     work_dir = cache_dir / "tuning"
@@ -378,6 +338,14 @@ def _build_tuned(workload_name: str, prim_func, target: str, trials: int):
             stats["best_trial_seconds"] = min(trial_means)
     except Exception as exc:  # Diagnostics only; never fail the benchmark.
         logger.warning("Failed to summarize tuning records: %s", exc)
+    logger.info(
+        "Tuned %s in %.1f s (%s of %d trials measured), compiled in %.1f s",
+        cache_key,
+        stats["tune_seconds"],
+        stats.get("trials_measured", "?"),
+        trials,
+        stats["compile_seconds"],
+    )
     stats_json = json.dumps(stats, indent=2)
     stats_path.write_text(stats_json)
     _write_output_file(STATS_FILENAME, stats_json)

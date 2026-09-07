@@ -22,9 +22,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Temporarily disable the MetaSchedule-tuned TVM jobs (backend
-# "metaschedule"). The out-of-the-box "tvm" jobs are unaffected.
-ENABLE_TVM_METASCHEDULE=false
+# MetaSchedule trial budget for every TVM job. TVM 0.20 has no untuned CPU
+# schedule for these ops (its unscheduled build is a scalar loop nest), so the
+# "tvm" backend is always MetaSchedule-tuned. Tuning runs before timing and is
+# never part of a sample; the job records it in build_stats.json
+# (tune_seconds, trials_measured, ...), which cherrybench uploads with the
+# job's output directory.
+TVM_TRIALS=128
 
 PHYSICAL_CORES=$(lscpu -p=CORE,SOCKET | grep -v '^#' | sort -u | wc -l | tr -d '[:space:]')
 if ! [[ "$PHYSICAL_CORES" =~ ^[0-9]+$ ]] || [ "$PHYSICAL_CORES" -lt 4 ]; then
@@ -128,10 +132,7 @@ emit_f32_matmul_baselines() {
     local gflops_value job_name
     gflops_value=$(calculate_gflops "$b" "$m" "$k" "$n")
     job_name="matmul-batch-parallel-f32-${b}x${m}x${k}x${n}"
-    for backend in intel-mkl aocl-4.2 openblas metaschedule tvm; do
-        if [ "$backend" = "metaschedule" ] && [ "$ENABLE_TVM_METASCHEDULE" != true ]; then
-            continue
-        fi
+    for backend in intel-mkl aocl-4.2 openblas tvm; do
         echo '[[jobs]]'
         echo "name = \"${job_name}\""
         echo "size = $n"
@@ -142,7 +143,7 @@ emit_f32_matmul_baselines() {
             intel-mkl) echo 'docker_path = "./intel-mkl"' ;;
             aocl-4.2) echo 'docker_path = "./aocl"' ;;
             openblas) echo 'docker_path = "./openblas"' ;;
-            metaschedule|tvm) echo 'docker_path = "./tvm"' ;;
+            tvm) echo 'docker_path = "./tvm"' ;;
         esac
         echo "command = [ \"batch-parallel-f32\", \"$b\", \"$m\", \"$k\", \"$n\"$(tvm_command_suffix "$backend") ]"
         echo "num_cores = $b"
@@ -150,11 +151,12 @@ emit_f32_matmul_baselines() {
     done
 }
 
-# Args: backend. Prints extra TOML command arguments for TVM backends.
+# Args: backend. Prints the extra TOML command arguments a TVM job takes (the
+# MetaSchedule trial budget); nothing for other backends.
 tvm_command_suffix() {
     local backend="$1"
-    if [ "$backend" = "metaschedule" ]; then
-        printf '%s' ", \"--scheduling\", \"metaschedule\""
+    if [ "$backend" = "tvm" ]; then
+        printf '%s' ", \"--trials\", \"$TVM_TRIALS\""
     fi
 }
 
@@ -304,21 +306,16 @@ for num_cores in "${softmax_num_cores[@]}"; do
     echo "num_cores = $num_cores"
     echo ""
 
-    for tvm_backend in metaschedule tvm; do
-        if [ "$tvm_backend" = "metaschedule" ] && [ "$ENABLE_TVM_METASCHEDULE" != true ]; then
-            continue
-        fi
-        echo '[[jobs]]'
-        echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
-        echo "size = $length"
-        echo "batch_size = $batch_size"
-        echo "gflops = $gflops_value"
-        echo "backend_name = \"$tvm_backend\""
-        echo 'docker_path = "./tvm"'
-        echo "command = [ \"softmax-f32\", \"$batch_size\", \"$length\", \"$num_cores\"$(tvm_command_suffix "$tvm_backend") ]"
-        echo "num_cores = $num_cores"
-        echo ""
-    done
+    echo '[[jobs]]'
+    echo "name = \"softmax-f32-${batch_size}x${length}-cores${num_cores}\""
+    echo "size = $length"
+    echo "batch_size = $batch_size"
+    echo "gflops = $gflops_value"
+    echo 'backend_name = "tvm"'
+    echo 'docker_path = "./tvm"'
+    echo "command = [ \"softmax-f32\", \"$batch_size\", \"$length\", \"$num_cores\"$(tvm_command_suffix tvm) ]"
+    echo "num_cores = $num_cores"
+    echo ""
 
     emit_morello_softmax "$batch_size" "$length" "$num_cores" "$gflops_value" \
         "" ""
@@ -530,7 +527,7 @@ for b in "tvm" "eigen"; do
         echo "backend_name = \"$b\""
         echo "docker_path = \"./$b\""
         if [ "$b" = "tvm" ]; then
-            echo "command = [ \"batch-parallel-u32\", \"1\", \"$m\", \"$k\", \"$n\" ]"
+            echo "command = [ \"batch-parallel-u32\", \"1\", \"$m\", \"$k\", \"$n\"$(tvm_command_suffix tvm) ]"
         else
             echo "command = [ \"$m\" ]"
         fi
