@@ -22,13 +22,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# MetaSchedule trial budget for every TVM job. TVM 0.20 has no untuned CPU
-# schedule for these ops (its unscheduled build is a scalar loop nest), so
-# TVM is always MetaSchedule-tuned here, and the budget is part of the backend
-# name the reporters see (see tvm_backend_name). Tuning runs before timing and
-# is never part of a sample; the job records it in build_stats.json
-# (tune_seconds, trials_measured, ...), which cherrybench uploads with the
-# job's output directory.
+# MetaSchedule trial budget for every TVM job.
 TVM_TRIALS=128
 
 # The backend name reported for TVM jobs: MetaSchedule with this many trials.
