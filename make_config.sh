@@ -233,12 +233,8 @@ morello_db_path() {
 }
 
 emit_morello_docker_build_args() {
-    local features="$1"
-    if [ -n "$features" ]; then
-        echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\", MORELLO_FEATURES = \"$features\" }"
-    else
-        echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-    fi
+    local features="verification${1:+ $1}"
+    echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\", MORELLO_FEATURES = \"$features\" }"
 }
 
 # Args: batch length num_cores gflops variant_name morello_feature
