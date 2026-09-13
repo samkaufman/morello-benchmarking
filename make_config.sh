@@ -333,21 +333,6 @@ echo "command = []"
 echo ""
 done
 
-# Temporarily disable Morello matmuls. Synthesis is too slow on HEAD.
-# TODO: Re-enable.
-#
-# for i in "${morello_matmul_sizes[@]}"; do
-# echo '[[jobs]]'
-# echo 'name = "matmul"'
-# echo "size = $i"
-# echo 'batch_size = 1'
-# echo "backend_name = \"morello\""
-# echo "docker_path = \"./morello\""
-# echo "docker_build_args = { MORELLO_VERSION = \"$MORELLO_HASH\" }"
-# echo "command = [ \"/run_bench.sh\", \"matmul\", \"$i\" ]"
-# echo ""
-# done
-
 # Add batch-parallel for most square shapes
 for batch_size in "${SMALL_PARALLEL_FACTORS[@]}"; do
 # iterate over multiples of 100 (100..4000) plus all powers of two 128..4096
