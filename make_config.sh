@@ -534,6 +534,6 @@ done
 if [ "${DISABLE_REMOTE_REPORTING:-false}" != true ]; then
     echo '[reporters.google_sheets]'
     echo "key_file = \"${MORELLO_SECRETS_KEY_PATH}\""
-    echo 'sheet_name = "Morello Performance Benchmarks"'
+    echo 'sheet_key = "1SIkh-oQBfxCU-2GMe-hcc5E-fyh1F_hpat5f-R6Dexg"'
     echo 'folder_name = "BETA"'
 fi
