@@ -114,9 +114,9 @@ for size in "${weekly_square_sizes[@]}"; do
     mkn_u8s8s16_combinations+=("$size,$size,$size")
 done
 
-# Use the latest commit hash of the main branch
+# Use the latest commit hash of the erase-vector-sizes branch
 MORELLO_HASH=$(
-    curl -s "https://api.github.com/repos/samkaufman/morello/branches/main" |
+    curl -s "https://api.github.com/repos/samkaufman/morello/branches/erase-vector-sizes" |
     jq -r '.commit.sha')
 declare -r MORELLO_HASH
 

@@ -224,7 +224,6 @@ where
             TensorSpecAux {
                 memory: CpuMemory::GL.into(),
                 layout: row_major(&shape),
-                vector_size: None,
             };
             2
         ],
