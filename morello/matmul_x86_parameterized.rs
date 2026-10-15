@@ -531,6 +531,26 @@ fn schedule_bf16_scalar_k_tile<Tgt: CpuTarget>(
 }
 
 fn schedule_broadcast_vec_mult_add_tile<Tgt: CpuTarget>(matmul: &ImplNode<Tgt>) -> ImplNode<Tgt> {
+    let out = spec_of(matmul).0.parameter(2);
+    let n_tile = out.shape()[2];
+    // Vector sizes are derived from tensor volume, and a VRF tile must keep its parent's vector
+    // size. When the whole MxN output would derive a wider vector than one N-row (e.g., a 6x4 f32
+    // remainder derives 8 lanes), tile to rows before moving the output into VRF.
+    let rows_keep_vector_size = Tgt::vector_size_for(out.dtype(), out.volume())
+        == Tgt::vector_size_for(out.dtype(), n_tile);
+    if !rows_keep_vector_size {
+        return matmul.tile_out_ensure_continue(&[1, 1, n_tile.get()], |row_tile| {
+            row_tile
+                .move_param(2, VRF)
+                .split_saturating_ensure_continue(1, |k_tile| {
+                    k_tile
+                        .move_param(1, VRF)
+                        .move_param(0, L1)
+                        .select(CpuKernel::BroadcastVecMultAdd)
+                })
+        });
+    }
+
     matmul
         .move_param(2, VRF)
         .split_saturating_ensure_continue(1, |k_tile| {
